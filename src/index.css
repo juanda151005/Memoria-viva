@@ -1,0 +1,51 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+  body {
+    @apply bg-paper text-ink font-sans antialiased;
+  }
+  ::selection {
+    @apply bg-terracota/20;
+  }
+}
+
+@layer components {
+  .container-mv {
+    @apply mx-auto w-full max-w-7xl px-5 sm:px-8;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-full px-6 py-3 text-sm font-semibold tracking-wide transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-terracota/50;
+  }
+  .btn-primary {
+    @apply btn bg-terracota text-cream hover:bg-terracota-dark shadow-soft hover:shadow-warm;
+  }
+  .btn-ghost {
+    @apply btn border border-arenaDark/70 bg-transparent text-ink hover:bg-cream;
+  }
+  .btn-selva {
+    @apply btn bg-selva text-cream hover:bg-selva-dark shadow-soft;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-arenaDark/60 bg-cream px-3 py-1 text-xs font-medium text-ink/80;
+  }
+  .card {
+    @apply rounded-xl2 border border-arena bg-cream shadow-soft;
+  }
+  .eyebrow {
+    @apply text-xs font-semibold uppercase tracking-[0.2em] text-terracota;
+  }
+}
+
+/* Textura sutil de "papel" para fondos */
+.paper-grain {
+  background-image: radial-gradient(
+    rgba(43, 33, 26, 0.04) 1px,
+    transparent 1px
+  );
+  background-size: 18px 18px;
+}
