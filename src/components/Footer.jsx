@@ -64,6 +64,16 @@ export default function Footer() {
                   Aportar un relato
                 </Link>
               </li>
+              <li>
+                <Link to="/revision" className="hover:text-ocre">
+                  Panel de revisión
+                </Link>
+              </li>
+              <li>
+                <Link to="/avance" className="hover:text-ocre">
+                  Avance del proyecto
+                </Link>
+              </li>
             </ul>
           </div>
 

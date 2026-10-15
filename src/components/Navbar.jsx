@@ -1,10 +1,13 @@
 import { useState } from 'react'
-import { Link, NavLink, useLocation } from 'react-router-dom'
+import { Link, NavLink } from 'react-router-dom'
+import { useStore } from '../context/StoreContext.jsx'
 
 const links = [
   { to: '/', label: 'Inicio', end: true },
   { to: '/catalogo', label: 'Explorar' },
   { to: '/subir', label: 'Subir contenido' },
+  { to: '/revision', label: 'Revisión' },
+  { to: '/avance', label: 'Avance' },
 ]
 
 function Logo() {
@@ -30,16 +33,29 @@ function Logo() {
   )
 }
 
+// Número de relatos esperando revisión comunitaria.
+function Contador({ n }) {
+  if (!n) return null
+  return (
+    <span
+      className="ml-1.5 inline-grid h-5 min-w-5 place-items-center rounded-full bg-terracota px-1.5 text-[11px] font-semibold text-cream"
+      aria-label={`${n} pendientes`}
+    >
+      {n}
+    </span>
+  )
+}
+
 export default function Navbar() {
   const [open, setOpen] = useState(false)
-  const location = useLocation()
+  const { pendientes } = useStore()
 
   return (
     <header className="sticky top-0 z-40 border-b border-arena/70 bg-paper/85 backdrop-blur-md">
       <nav className="container-mv flex h-16 items-center justify-between">
         <Logo />
 
-        <div className="hidden items-center gap-1 md:flex">
+        <div className="hidden items-center gap-1 lg:flex">
           {links.map((l) => (
             <NavLink
               key={l.to}
@@ -54,6 +70,7 @@ export default function Navbar() {
               }
             >
               {l.label}
+              {l.to === '/revision' && <Contador n={pendientes.length} />}
             </NavLink>
           ))}
           <Link to="/subir" className="btn-primary ml-2 !py-2 !px-5">
@@ -62,7 +79,7 @@ export default function Navbar() {
         </div>
 
         <button
-          className="grid h-10 w-10 place-items-center rounded-lg border border-arenaDark/60 md:hidden"
+          className="grid h-10 w-10 place-items-center rounded-lg border border-arenaDark/60 lg:hidden"
           onClick={() => setOpen((v) => !v)}
           aria-label="Abrir menú"
           aria-expanded={open}
@@ -76,7 +93,7 @@ export default function Navbar() {
       </nav>
 
       {open && (
-        <div className="border-t border-arena/70 bg-paper md:hidden">
+        <div className="border-t border-arena/70 bg-paper lg:hidden">
           <div className="container-mv flex flex-col gap-1 py-3">
             {links.map((l) => (
               <NavLink
@@ -91,13 +108,10 @@ export default function Navbar() {
                 }
               >
                 {l.label}
+                {l.to === '/revision' && <Contador n={pendientes.length} />}
               </NavLink>
             ))}
-            <Link
-              to="/subir"
-              onClick={() => setOpen(false)}
-              className="btn-primary mt-1"
-            >
+            <Link to="/subir" onClick={() => setOpen(false)} className="btn-primary mt-1">
               Aportar un relato
             </Link>
           </div>

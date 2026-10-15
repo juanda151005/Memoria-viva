@@ -6,6 +6,8 @@ import Home from './pages/Home.jsx'
 import Catalog from './pages/Catalog.jsx'
 import StoryDetail from './pages/StoryDetail.jsx'
 import Upload from './pages/Upload.jsx'
+import Revision from './pages/Revision.jsx'
+import Avance from './pages/Avance.jsx'
 
 function ScrollToTop() {
   const { pathname } = useLocation()
@@ -26,6 +28,8 @@ export default function App() {
           <Route path="/catalogo" element={<Catalog />} />
           <Route path="/relato/:id" element={<StoryDetail />} />
           <Route path="/subir" element={<Upload />} />
+          <Route path="/revision" element={<Revision />} />
+          <Route path="/avance" element={<Avance />} />
         </Routes>
       </main>
       <Footer />

@@ -1,7 +1,10 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import StoryCard from '../components/StoryCard.jsx'
+import StoryCardSkeleton from '../components/StoryCardSkeleton.jsx'
+import ErrorBanner from '../components/ErrorBanner.jsx'
+import { api } from '../api/client.js'
+import { useApi } from '../hooks/useApi.js'
 import {
-  relatos,
   departamentos,
   tiposPatrimonio,
   tematicas,
@@ -41,35 +44,30 @@ function FilterSelect({ label, value, onChange, options }) {
 export default function Catalog() {
   const [filters, setFilters] = useState(initialFilters)
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [busqueda, setBusqueda] = useState('')
+  const [intento, setIntento] = useState(0)
 
   const set = (key) => (val) => setFilters((f) => ({ ...f, [key]: val }))
 
-  const resultados = useMemo(() => {
-    const q = filters.q.trim().toLowerCase()
-    return relatos.filter((r) => {
-      if (filters.departamento && r.departamento !== filters.departamento)
-        return false
-      if (filters.tipo && r.tipo !== filters.tipo) return false
-      if (filters.tematica && !r.tematicas.includes(filters.tematica))
-        return false
-      if (filters.epoca && r.epoca !== filters.epoca) return false
-      if (q) {
-        const haystack = [
-          r.titulo,
-          r.comunidad,
-          r.municipio,
-          r.departamento,
-          r.narrador,
-          r.fragmento,
-          ...r.tematicas,
-        ]
-          .join(' ')
-          .toLowerCase()
-        if (!haystack.includes(q)) return false
-      }
-      return true
-    })
-  }, [filters])
+  // La búsqueda de texto espera a que se deje de escribir antes de consultar.
+  useEffect(() => {
+    const t = setTimeout(() => setBusqueda(filters.q.trim()), 250)
+    return () => clearTimeout(t)
+  }, [filters.q])
+
+  // Filtros y búsqueda se resuelven en la base de datos (GET /api/relatos).
+  const { data, loading, error } = useApi(
+    () =>
+      api.listarRelatos({
+        q: busqueda,
+        departamento: filters.departamento,
+        tipo: filters.tipo,
+        tematica: filters.tematica,
+        epoca: filters.epoca,
+      }),
+    [busqueda, filters.departamento, filters.tipo, filters.tematica, filters.epoca, intento]
+  )
+  const resultados = data ?? []
 
   const activos = Object.entries(filters).filter(
     ([k, v]) => v && k !== 'q'
@@ -164,6 +162,9 @@ export default function Catalog() {
                   {resultados.length}
                 </span>{' '}
                 {resultados.length === 1 ? 'relato' : 'relatos'}
+                {loading && data && (
+                  <span className="ml-2 text-xs text-ink/45">actualizando…</span>
+                )}
               </p>
               <button
                 onClick={() => setMobileOpen((v) => !v)}
@@ -178,7 +179,15 @@ export default function Catalog() {
               <div className="mb-6 card p-5 lg:hidden">{FilterPanel}</div>
             )}
 
-            {resultados.length > 0 ? (
+            {error ? (
+              <ErrorBanner error={error} onReintentar={() => setIntento((n) => n + 1)} />
+            ) : loading && !data ? (
+              <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-3">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <StoryCardSkeleton key={i} />
+                ))}
+              </div>
+            ) : resultados.length > 0 ? (
               <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-3">
                 {resultados.map((r) => (
                   <StoryCard key={r.id} relato={r} />

@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import GeneratedArt from './GeneratedArt.jsx'
+import RelatoMedia from './RelatoMedia.jsx'
 import AiBadge from './AiBadge.jsx'
 import { tipoIcon, tipoLabel } from '../data/mockData.js'
 
@@ -10,9 +10,8 @@ export default function StoryCard({ relato }) {
       className="card group flex flex-col overflow-hidden transition-all duration-300 hover:-translate-y-1 hover:shadow-warm"
     >
       <div className="relative aspect-[4/3] overflow-hidden">
-        <GeneratedArt
-          seed={relato.id}
-          palette={relato.palette}
+        <RelatoMedia
+          relato={relato}
           className="h-full w-full transition-transform duration-500 group-hover:scale-105"
         />
         {relato.iaGenerada && (

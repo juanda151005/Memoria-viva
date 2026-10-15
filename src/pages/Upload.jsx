@@ -1,40 +1,56 @@
-import { useState, useEffect, useRef } from 'react'
-import {
-  departamentos,
-  tiposPatrimonio,
-  tematicas,
-  epocas,
-} from '../data/mockData.js'
+import { useState, useEffect, useMemo, useRef } from 'react'
+import { Link } from 'react-router-dom'
+import { useStore } from '../context/StoreContext.jsx'
+import { departamentos, tiposPatrimonio, tematicas, epocas } from '../data/mockData.js'
+import { formatoBytes } from '../utils/formato.js'
+
+const LIMITE_ARCHIVO = 500 * 1024 * 1024 // debe coincidir con server/app.js
 
 const steps = [
+  { id: 'sube', label: 'Subiendo al servidor', icon: '☁️', desc: 'Almacenamiento del archivo original' },
   { id: 'transcribe', label: 'Transcribiendo audio', icon: '📝', desc: 'Modelo tipo Whisper' },
   { id: 'clasifica', label: 'Clasificando en el catálogo', icon: '🗂️', desc: 'Región, tipo y temática' },
-  { id: 'ilustra', label: 'Generando ilustración', icon: '🎨', desc: 'Solo si no hay imagen' },
-  { id: 'listo', label: 'Listo para revisión', icon: '✅', desc: 'Espera aprobación comunitaria' },
+  { id: 'ilustra', label: 'Generando ilustración', icon: '🎨', desc: 'Solo si no hay imagen o video' },
+  { id: 'listo', label: 'Guardado — listo para revisión', icon: '✅', desc: 'Espera aprobación comunitaria' },
 ]
 
-function DropZone({ file, setFile }) {
+const formularioVacio = {
+  titulo: '',
+  comunidad: '',
+  narrador: '',
+  departamento: '',
+  municipio: '',
+  tipo: '',
+  epoca: '',
+  descripcion: '',
+  tematicas: [],
+  consentimiento: false,
+}
+
+function DropZone({ file, setFile, disabled }) {
   const [drag, setDrag] = useState(false)
   const inputRef = useRef(null)
 
   const pick = (f) => {
-    if (f) setFile({ name: f.name, size: f.size, type: f.type })
+    if (f) setFile(f)
   }
 
   return (
     <div
       onDragOver={(e) => {
         e.preventDefault()
-        setDrag(true)
+        if (!disabled) setDrag(true)
       }}
       onDragLeave={() => setDrag(false)}
       onDrop={(e) => {
         e.preventDefault()
         setDrag(false)
-        pick(e.dataTransfer.files?.[0])
+        if (!disabled) pick(e.dataTransfer.files?.[0])
       }}
-      onClick={() => inputRef.current?.click()}
-      className={`grid cursor-pointer place-items-center rounded-xl2 border-2 border-dashed px-6 py-14 text-center transition-colors ${
+      onClick={() => !disabled && inputRef.current?.click()}
+      className={`grid place-items-center rounded-xl2 border-2 border-dashed px-6 py-14 text-center transition-colors ${
+        disabled ? 'cursor-not-allowed opacity-70' : 'cursor-pointer'
+      } ${
         drag
           ? 'border-terracota bg-terracota/5'
           : 'border-arenaDark/70 bg-cream hover:border-terracota/60 hover:bg-paper'
@@ -52,29 +68,28 @@ function DropZone({ file, setFile }) {
           <div className="text-4xl">📄</div>
           <p className="mt-3 font-serif text-lg font-600 text-ink">{file.name}</p>
           <p className="mt-1 text-sm text-ink/60">
-            {file.type || 'archivo'} · {(file.size / 1024 / 1024).toFixed(2)} MB
+            {file.type || 'archivo'} · {formatoBytes(file.size)}
           </p>
-          <button
-            onClick={(e) => {
-              e.stopPropagation()
-              setFile(null)
-            }}
-            className="mt-4 text-sm font-medium text-terracota hover:underline"
-          >
-            Elegir otro archivo
-          </button>
+          {!disabled && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation()
+                setFile(null)
+              }}
+              className="mt-4 text-sm font-medium text-terracota hover:underline"
+            >
+              Elegir otro archivo
+            </button>
+          )}
         </div>
       ) : (
         <div>
           <div className="mx-auto grid h-16 w-16 place-items-center rounded-full bg-selva/10 text-3xl">
             ⬆️
           </div>
-          <p className="mt-4 font-serif text-xl font-600 text-ink">
-            Arrastra tu archivo aquí
-          </p>
-          <p className="mt-1 text-sm text-ink/60">
-            o haz clic para seleccionarlo
-          </p>
+          <p className="mt-4 font-serif text-xl font-600 text-ink">Arrastra tu archivo aquí</p>
+          <p className="mt-1 text-sm text-ink/60">o haz clic para seleccionarlo</p>
           <div className="mt-5 flex flex-wrap justify-center gap-2">
             {['🎙️ Audio', '🎬 Video', '📷 Foto', '📄 Documento'].map((t) => (
               <span key={t} className="chip">
@@ -82,9 +97,7 @@ function DropZone({ file, setFile }) {
               </span>
             ))}
           </div>
-          <p className="mt-4 text-xs text-ink/45">
-            MP3, WAV, MP4, JPG, PNG, PDF · hasta 500 MB
-          </p>
+          <p className="mt-4 text-xs text-ink/45">MP3, WAV, MP4, JPG, PNG, PDF · hasta 500 MB</p>
         </div>
       )}
     </div>
@@ -103,14 +116,40 @@ function Field({ label, children, required }) {
 }
 
 const inputCls =
-  'w-full rounded-lg border border-arenaDark/60 bg-cream px-3.5 py-2.5 text-sm text-ink placeholder-ink/40 focus:border-terracota focus:outline-none focus:ring-2 focus:ring-terracota/20'
+  'w-full rounded-lg border border-arenaDark/60 bg-cream px-3.5 py-2.5 text-sm text-ink placeholder-ink/40 focus:border-terracota focus:outline-none focus:ring-2 focus:ring-terracota/20 disabled:opacity-60'
 
-function Stepper({ current }) {
+// Descripción de cada paso según lo que respondió el servidor.
+function detallePaso(id, { progreso, file, resultado }) {
+  if (id === 'sube') {
+    return file
+      ? `${Math.round(progreso * 100)}% de ${formatoBytes(file.size)}`
+      : 'Sin archivo adjunto: se guardan solo los datos'
+  }
+  if (!resultado) return null
+  const medio = resultado.archivo?.tipoMedio
+  if (id === 'transcribe' && !['audio', 'video'].includes(medio)) {
+    return 'Sin audio: se usa la descripción escrita'
+  }
+  if (id === 'clasifica') {
+    const conf = Math.round((resultado.revisionIA?.confianza ?? 0) * 100)
+    return `Región ${resultado.region} · ${conf}% de confianza`
+  }
+  if (id === 'ilustra') {
+    return resultado.iaGenerada
+      ? 'Ilustración propuesta (marcada como IA)'
+      : 'Se conserva la imagen o video original'
+  }
+  if (id === 'listo') return `Código MV-${resultado.id.slice(0, 6).toUpperCase()}`
+  return null
+}
+
+function Stepper({ current, transcrito, progreso, file, resultado }) {
   return (
     <ol className="space-y-4">
       {steps.map((s, i) => {
         const done = i < current
         const active = i === current
+        const detalle = (done || active) && detallePaso(s.id, { progreso, file, resultado })
         return (
           <li key={s.id} className="flex items-start gap-4">
             <div
@@ -118,26 +157,36 @@ function Stepper({ current }) {
                 done
                   ? 'bg-selva text-cream'
                   : active
-                  ? 'bg-terracota text-cream animate-pulse'
+                  ? 'animate-pulse bg-terracota text-cream'
                   : 'bg-arena text-ink/50'
               }`}
             >
               {done ? '✓' : s.icon}
             </div>
-            <div className="flex-1 pt-1">
-              <p
-                className={`font-semibold ${
-                  done || active ? 'text-ink' : 'text-ink/50'
-                }`}
-              >
+            <div className="min-w-0 flex-1 pt-1">
+              <p className={`font-semibold ${done || active ? 'text-ink' : 'text-ink/50'}`}>
                 {s.label}
-                {active && (
-                  <span className="ml-2 text-xs font-normal text-terracota">
-                    procesando…
-                  </span>
-                )}
+                {active && <span className="ml-2 text-xs font-normal text-terracota">procesando…</span>}
               </p>
-              <p className="text-xs text-ink/55">{s.desc}</p>
+              <p className="text-xs text-ink/55">{detalle || s.desc}</p>
+
+              {/* Progreso real de la subida */}
+              {s.id === 'sube' && active && file && (
+                <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-arena">
+                  <div
+                    className="h-full rounded-full bg-terracota transition-[width]"
+                    style={{ width: `${Math.round(progreso * 100)}%` }}
+                  />
+                </div>
+              )}
+
+              {/* Transcripción devuelta por el servidor, escrita en vivo */}
+              {s.id === 'transcribe' && (active || done) && transcrito && (
+                <p className="mt-2 rounded-lg border border-arena bg-paper p-3 font-serif text-xs italic leading-relaxed text-ink/75">
+                  “{transcrito}
+                  {active && <span className="animate-pulse">▍</span>}”
+                </p>
+              )}
             </div>
           </li>
         )
@@ -147,29 +196,112 @@ function Stepper({ current }) {
 }
 
 export default function Upload() {
+  const { subirRelato } = useStore()
+
   const [file, setFile] = useState(null)
-  const [processing, setProcessing] = useState(false)
-  const [current, setCurrent] = useState(0)
+  const [form, setForm] = useState(formularioVacio)
+  const [error, setError] = useState('')
 
+  // fase: 'idle' | 'procesando' | 'listo'
+  const [fase, setFase] = useState('idle')
+  const [current, setCurrent] = useState(-1)
+  const [progreso, setProgreso] = useState(0)
+  const [resultado, setResultado] = useState(null)
+  const [transcrito, setTranscrito] = useState('')
+
+  const ocupado = fase === 'procesando'
+
+  const upd = (k, v) => setForm((f) => ({ ...f, [k]: v }))
+  const toggleTema = (t) =>
+    setForm((f) => ({
+      ...f,
+      tematicas: f.tematicas.includes(t)
+        ? f.tematicas.filter((x) => x !== t)
+        : [...f.tematicas, t],
+    }))
+
+  // Texto que se "escribe" en el paso de transcripción (máx. 60 palabras).
+  const palabras = useMemo(() => {
+    if (!resultado) return []
+    const texto = resultado.transcripcion.join(' ') || 'Sin audio: no hay nada que transcribir.'
+    return texto.split(/\s+/).slice(0, 60)
+  }, [resultado])
+
+  // Avance de los pasos de IA una vez el servidor respondió.
   useEffect(() => {
-    if (!processing) return
-    if (current >= steps.length) return
-    const t = setTimeout(() => setCurrent((c) => c + 1), 1400)
+    if (fase !== 'procesando' || current < 1) return
+    if (current >= steps.length) {
+      setFase('listo')
+      return
+    }
+    const espera = current === 1 ? Math.max(1400, palabras.length * 45 + 400) : 1100
+    const t = setTimeout(() => setCurrent((c) => c + 1), espera)
     return () => clearTimeout(t)
-  }, [processing, current])
+  }, [fase, current, palabras])
 
-  const finished = processing && current >= steps.length
+  // Escritura en vivo de la transcripción.
+  useEffect(() => {
+    if (current !== 1 || !palabras.length) return
+    let i = 0
+    const iv = setInterval(() => {
+      i++
+      setTranscrito(palabras.slice(0, i).join(' '))
+      if (i >= palabras.length) clearInterval(iv)
+    }, 45)
+    return () => clearInterval(iv)
+  }, [current, palabras])
 
-  const start = (e) => {
+  const start = async (e) => {
     e.preventDefault()
+    const faltantes = ['titulo', 'comunidad', 'narrador', 'departamento', 'municipio', 'tipo']
+    if (faltantes.some((k) => !form[k].trim())) {
+      setError('Completa los campos obligatorios (*) para procesar el relato.')
+      return
+    }
+    if (!form.consentimiento) {
+      setError('Necesitas confirmar el consentimiento comunitario para continuar.')
+      return
+    }
+    if (file && file.size > LIMITE_ARCHIVO) {
+      setError('El archivo supera el límite de 500 MB.')
+      return
+    }
+
+    const datos = new FormData()
+    for (const k of ['titulo', 'comunidad', 'narrador', 'departamento', 'municipio', 'tipo', 'epoca', 'descripcion']) {
+      datos.append(k, form[k])
+    }
+    datos.append('tematicas', JSON.stringify(form.tematicas))
+    datos.append('consentimiento', String(form.consentimiento))
+    if (file) datos.append('archivo', file)
+
+    setError('')
+    setResultado(null)
+    setTranscrito('')
+    setProgreso(0)
     setCurrent(0)
-    setProcessing(true)
+    setFase('procesando')
+
+    try {
+      const relato = await subirRelato(datos, setProgreso)
+      setProgreso(1)
+      setResultado(relato)
+      setCurrent(1)
+    } catch (err) {
+      setError(err.message)
+      setFase('idle')
+      setCurrent(-1)
+    }
   }
 
   const reset = () => {
-    setProcessing(false)
-    setCurrent(0)
+    setFase('idle')
+    setCurrent(-1)
+    setProgreso(0)
+    setResultado(null)
+    setTranscrito('')
     setFile(null)
+    setForm(formularioVacio)
   }
 
   return (
@@ -181,9 +313,8 @@ export default function Upload() {
             Sube un relato de tu comunidad
           </h1>
           <p className="mt-3 max-w-2xl text-ink/70">
-            La inteligencia artificial transcribe y organiza automáticamente. Tu
-            comunidad revisa y decide qué se publica. Tú siempre conservas la
-            autoría.
+            La inteligencia artificial transcribe y organiza automáticamente. Tu comunidad
+            revisa y decide qué se publica. Tú siempre conservas la autoría.
           </p>
         </div>
       </section>
@@ -192,164 +323,233 @@ export default function Upload() {
         <div className="grid gap-10 lg:grid-cols-[1.5fr_1fr]">
           {/* Formulario */}
           <form onSubmit={start} className="space-y-8">
-            <div>
-              <h2 className="font-serif text-2xl font-600 text-ink">
-                1. El archivo
-              </h2>
-              <p className="mt-1 text-sm text-ink/60">
-                Audio, video, foto o documento con el relato.
-              </p>
-              <div className="mt-4">
-                <DropZone file={file} setFile={setFile} />
+            <fieldset disabled={ocupado || fase === 'listo'} className="space-y-8">
+              <div>
+                <h2 className="font-serif text-2xl font-600 text-ink">1. El archivo</h2>
+                <p className="mt-1 text-sm text-ink/60">
+                  Audio, video, foto o documento con el relato.
+                </p>
+                <div className="mt-4">
+                  <DropZone file={file} setFile={setFile} disabled={ocupado || fase === 'listo'} />
+                </div>
               </div>
-            </div>
 
-            <div>
-              <h2 className="font-serif text-2xl font-600 text-ink">
-                2. Datos del relato
-              </h2>
-              <p className="mt-1 text-sm text-ink/60">
-                La IA propondrá clasificaciones; puedes ajustarlas.
-              </p>
+              <div>
+                <h2 className="font-serif text-2xl font-600 text-ink">2. Datos del relato</h2>
+                <p className="mt-1 text-sm text-ink/60">
+                  La IA propondrá clasificaciones; puedes ajustarlas.
+                </p>
 
-              <div className="mt-4 grid gap-5 sm:grid-cols-2">
-                <div className="sm:col-span-2">
-                  <Field label="Título del relato" required>
+                <div className="mt-4 grid gap-5 sm:grid-cols-2">
+                  <div className="sm:col-span-2">
+                    <Field label="Título del relato" required>
+                      <input
+                        className={inputCls}
+                        maxLength={160}
+                        placeholder="Ej. El canto de boga para subir el río"
+                        value={form.titulo}
+                        onChange={(e) => upd('titulo', e.target.value)}
+                      />
+                    </Field>
+                  </div>
+
+                  <Field label="Comunidad" required>
                     <input
                       className={inputCls}
-                      placeholder="Ej. El canto de boga para subir el río"
+                      placeholder="Ej. Bogas del Atrato"
+                      value={form.comunidad}
+                      onChange={(e) => upd('comunidad', e.target.value)}
                     />
                   </Field>
-                </div>
 
-                <Field label="Comunidad" required>
-                  <input className={inputCls} placeholder="Ej. Bogas del Atrato" />
-                </Field>
-
-                <Field label="Narrador / autor" required>
-                  <input className={inputCls} placeholder="Nombre de quien narra" />
-                </Field>
-
-                <Field label="Departamento" required>
-                  <select className={inputCls} defaultValue="">
-                    <option value="" disabled>
-                      Selecciona…
-                    </option>
-                    {departamentos.map((d) => (
-                      <option key={d}>{d}</option>
-                    ))}
-                  </select>
-                </Field>
-
-                <Field label="Municipio" required>
-                  <input className={inputCls} placeholder="Ej. Quibdó" />
-                </Field>
-
-                <Field label="Tipo de patrimonio" required>
-                  <select className={inputCls} defaultValue="">
-                    <option value="" disabled>
-                      Selecciona…
-                    </option>
-                    {tiposPatrimonio.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.icon} {t.label}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-
-                <Field label="Época">
-                  <select className={inputCls} defaultValue="">
-                    <option value="" disabled>
-                      Selecciona…
-                    </option>
-                    {epocas.map((e) => (
-                      <option key={e}>{e}</option>
-                    ))}
-                  </select>
-                </Field>
-
-                <div className="sm:col-span-2">
-                  <Field label="Temáticas">
-                    <div className="flex flex-wrap gap-2">
-                      {tematicas.map((t) => (
-                        <label
-                          key={t}
-                          className="chip cursor-pointer select-none hover:border-terracota has-[:checked]:border-terracota has-[:checked]:bg-terracota/10 has-[:checked]:text-terracota"
-                        >
-                          <input type="checkbox" className="hidden" />
-                          {t}
-                        </label>
-                      ))}
-                    </div>
-                  </Field>
-                </div>
-
-                <div className="sm:col-span-2">
-                  <Field label="Descripción / contexto">
-                    <textarea
-                      rows={3}
+                  <Field label="Narrador / autor" required>
+                    <input
                       className={inputCls}
-                      placeholder="¿En qué contexto se narra? ¿Qué significa para la comunidad?"
+                      placeholder="Nombre de quien narra"
+                      value={form.narrador}
+                      onChange={(e) => upd('narrador', e.target.value)}
                     />
                   </Field>
+
+                  <Field label="Departamento" required>
+                    <select
+                      className={inputCls}
+                      value={form.departamento}
+                      onChange={(e) => upd('departamento', e.target.value)}
+                    >
+                      <option value="" disabled>
+                        Selecciona…
+                      </option>
+                      {departamentos.map((d) => (
+                        <option key={d}>{d}</option>
+                      ))}
+                    </select>
+                  </Field>
+
+                  <Field label="Municipio" required>
+                    <input
+                      className={inputCls}
+                      placeholder="Ej. Quibdó"
+                      value={form.municipio}
+                      onChange={(e) => upd('municipio', e.target.value)}
+                    />
+                  </Field>
+
+                  <Field label="Tipo de patrimonio" required>
+                    <select
+                      className={inputCls}
+                      value={form.tipo}
+                      onChange={(e) => upd('tipo', e.target.value)}
+                    >
+                      <option value="" disabled>
+                        Selecciona…
+                      </option>
+                      {tiposPatrimonio.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.icon} {t.label}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+
+                  <Field label="Época">
+                    <select
+                      className={inputCls}
+                      value={form.epoca}
+                      onChange={(e) => upd('epoca', e.target.value)}
+                    >
+                      <option value="" disabled>
+                        Selecciona…
+                      </option>
+                      {epocas.map((ep) => (
+                        <option key={ep}>{ep}</option>
+                      ))}
+                    </select>
+                  </Field>
+
+                  <div className="sm:col-span-2">
+                    <Field label="Temáticas">
+                      <div className="flex flex-wrap gap-2">
+                        {tematicas.map((t) => {
+                          const on = form.tematicas.includes(t)
+                          return (
+                            <button
+                              type="button"
+                              key={t}
+                              onClick={() => toggleTema(t)}
+                              aria-pressed={on}
+                              className={`chip cursor-pointer select-none transition ${
+                                on
+                                  ? '!border-terracota !bg-terracota/10 !text-terracota'
+                                  : 'hover:border-terracota'
+                              }`}
+                            >
+                              {t}
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </Field>
+                  </div>
+
+                  <div className="sm:col-span-2">
+                    <Field label="Descripción / contexto">
+                      <textarea
+                        rows={3}
+                        className={inputCls}
+                        placeholder="¿En qué contexto se narra? ¿Qué significa para la comunidad?"
+                        value={form.descripcion}
+                        onChange={(e) => upd('descripcion', e.target.value)}
+                      />
+                    </Field>
+                  </div>
                 </div>
               </div>
-            </div>
 
-            {/* Consentimiento */}
-            <div className="card border-anil/30 bg-anil/5 p-5">
-              <label className="flex items-start gap-3 text-sm text-ink/80">
-                <input type="checkbox" className="mt-1 h-4 w-4 accent-terracota" />
-                <span>
-                  Cuento con el <strong>consentimiento de la persona narradora</strong> y de
-                  la comunidad para registrar y compartir este relato, y entiendo
-                  que se publicará solo tras la revisión comunitaria.
-                </span>
-              </label>
-            </div>
+              {/* Consentimiento */}
+              <div className="card border-anil/30 bg-anil/5 p-5">
+                <label className="flex items-start gap-3 text-sm text-ink/80">
+                  <input
+                    type="checkbox"
+                    className="mt-1 h-4 w-4 accent-terracota"
+                    checked={form.consentimiento}
+                    onChange={(e) => upd('consentimiento', e.target.checked)}
+                  />
+                  <span>
+                    Cuento con el <strong>consentimiento de la persona narradora</strong> y de
+                    la comunidad para registrar y compartir este relato, y entiendo que se
+                    publicará solo tras la revisión comunitaria.
+                  </span>
+                </label>
+              </div>
+            </fieldset>
 
-            <button type="submit" className="btn-primary w-full sm:w-auto">
-              Procesar con IA
-            </button>
+            {error && (
+              <p
+                role="alert"
+                className="rounded-lg border border-terracota/40 bg-terracota/5 px-4 py-3 text-sm font-medium text-terracota"
+              >
+                {error}
+              </p>
+            )}
+
+            {fase !== 'listo' && (
+              <button
+                type="submit"
+                disabled={ocupado}
+                className="btn-primary w-full disabled:opacity-60 sm:w-auto"
+              >
+                {ocupado ? 'Procesando…' : 'Procesar con IA'}
+              </button>
+            )}
           </form>
 
           {/* Panel de procesamiento */}
           <aside>
-            <div className="lg:sticky lg:top-24 card p-6">
-              <h2 className="font-serif text-xl font-600 text-ink">
-                Procesamiento con IA
-              </h2>
+            <div className="card p-6 lg:sticky lg:top-24">
+              <h2 className="font-serif text-xl font-600 text-ink">Procesamiento con IA</h2>
               <p className="mt-1 text-sm text-ink/60">
-                {processing
-                  ? 'Así transforma la IA tu archivo:'
-                  : 'Cuando envíes el archivo, verás aquí el avance.'}
+                {fase === 'idle'
+                  ? 'Cuando envíes el relato, verás aquí el avance.'
+                  : 'Así transforma la plataforma tu archivo:'}
               </p>
 
               <div className="mt-6">
-                <Stepper current={processing ? current : -1} />
+                <Stepper
+                  current={current}
+                  transcrito={transcrito}
+                  progreso={progreso}
+                  file={file}
+                  resultado={resultado}
+                />
               </div>
 
-              {finished && (
+              {fase === 'listo' && (
                 <div className="mt-6 rounded-xl bg-selva/10 p-4 text-center">
                   <div className="text-3xl">🎉</div>
                   <p className="mt-2 font-serif text-lg font-600 text-selva">
-                    ¡Enviado para revisión!
+                    ¡Guardado y enviado a revisión!
                   </p>
                   <p className="mt-1 text-xs text-ink/65">
-                    Tu relato quedó en cola. Una persona de la comunidad lo
-                    revisará antes de publicarlo.
+                    El relato quedó en la base de datos, en la cola de revisión. Una persona
+                    de la comunidad lo revisará antes de publicarlo.
                   </p>
-                  <button onClick={reset} className="btn-ghost mt-4 !py-2 !px-4">
-                    Subir otro
-                  </button>
+                  <div className="mt-4 flex flex-col gap-2">
+                    <Link to="/revision" className="btn-selva !px-4 !py-2">
+                      Ver panel de revisión →
+                    </Link>
+                    <button onClick={reset} className="btn-ghost !px-4 !py-2">
+                      Subir otro
+                    </button>
+                  </div>
                 </div>
               )}
 
-              {!processing && (
+              {fase === 'idle' && (
                 <p className="mt-6 text-xs text-ink/45">
-                  Demostración visual — en el prototipo no se procesan ni
-                  almacenan archivos reales.
+                  El archivo y los datos se guardan en el servidor. La transcripción,
+                  clasificación e ilustración aún son simuladas: la integración con modelos
+                  reales es la siguiente fase.
                 </p>
               )}
             </div>

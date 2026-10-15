@@ -295,6 +295,59 @@ export const relatos = [
   },
 ]
 
+// --- Relatos sembrados en la cola de revisión -------------------------------
+// Llegan a la base de datos como pendientes, para que el panel de revisión
+// comunitaria tenga material desde el primer arranque.
+
+export const relatosPendientesSeed = [
+  {
+    id: 'pend-arrullo-guapi',
+    titulo: 'Arrullo para dormir al niño',
+    comunidad: 'Cantadoras del río Guapi',
+    municipio: 'Guapi',
+    departamento: 'Cauca',
+    region: 'Pacífico',
+    narrador: 'Celia Bazán',
+    tipo: 'musica',
+    tematicas: ['Música y danza', 'Familia'],
+    epoca: 'Después de 2000',
+    fechaRegistro: '2026-10-13',
+    estado: 'en_revision',
+    duracion: '3:21',
+    iaGenerada: true,
+    palette: ['#3A4A7A', '#D08C2E'],
+    fragmento:
+      'Los arrullos del Pacífico no solo duermen al niño: le siembran en el oído la lengua y la historia de su gente…',
+    transcripcion: [
+      'Duérmete niño, duérmete ya, que viene el río y te va a arrullar. Así cantaban mi mamá y mi abuela, meciendo el chinchorro con el pie mientras desgranaban el maíz.',
+      'El arrullo es lo primero que uno oye en la vida, antes de hablar. Por eso cuando grande, el currulao se le mete a uno en el cuerpo: ya venía desde la cuna.',
+    ],
+  },
+  {
+    id: 'pend-trampa-pesca',
+    titulo: 'La trampa de pesca tradicional del canangucho',
+    comunidad: 'Pueblo Tikuna',
+    municipio: 'Leticia',
+    departamento: 'Amazonas',
+    region: 'Amazonía',
+    narrador: 'Moisés Ahue',
+    tipo: 'oficio',
+    tematicas: ['Naturaleza', 'Territorio', 'Familia'],
+    epoca: 'Sin fecha definida',
+    fechaRegistro: '2026-10-14',
+    estado: 'en_revision',
+    duracion: '5:47',
+    iaGenerada: true,
+    palette: ['#2F4A3C', '#C96B45'],
+    fragmento:
+      'Se teje con fibras del monte y se calcula según la creciente del río; cada nudo guarda un saber de generaciones…',
+    transcripcion: [
+      'La trampa se arma en la boca de los caños, cuando el río empieza a bajar. Uno tiene que leer el agua: saber cuándo sube el pescado, qué luna es, qué fibras aguantan la corriente.',
+      'Mi papá me llevaba de niño a ponerlas. No es solo coger pescado: es entender que el río da, pero hay que pedirle permiso y no abusar.',
+    ],
+  },
+]
+
 // --- Estadísticas de la home ------------------------------------------------
 
 export const estadisticas = [

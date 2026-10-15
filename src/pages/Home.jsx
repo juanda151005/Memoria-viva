@@ -1,7 +1,11 @@
 import { Link } from 'react-router-dom'
 import StoryCard from '../components/StoryCard.jsx'
+import StoryCardSkeleton from '../components/StoryCardSkeleton.jsx'
+import ErrorBanner from '../components/ErrorBanner.jsx'
 import GeneratedArt from '../components/GeneratedArt.jsx'
-import { relatos, estadisticas, pasos } from '../data/mockData.js'
+import { api } from '../api/client.js'
+import { useApi } from '../hooks/useApi.js'
+import { estadisticas, pasos } from '../data/mockData.js'
 
 function Hero() {
   return (
@@ -180,7 +184,10 @@ function ComoFunciona() {
 }
 
 function Destacados() {
-  const destacados = relatos.slice(0, 4)
+  const { data: destacados, loading, error } = useApi(
+    () => api.listarRelatos({ limit: 4 }),
+    []
+  )
   return (
     <section className="container-mv py-20 sm:py-28">
       <div className="flex flex-wrap items-end justify-between gap-4">
@@ -195,11 +202,15 @@ function Destacados() {
         </Link>
       </div>
 
-      <div className="mt-10 grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
-        {destacados.map((r) => (
-          <StoryCard key={r.id} relato={r} />
-        ))}
-      </div>
+      {error ? (
+        <ErrorBanner error={error} className="mt-10" />
+      ) : (
+        <div className="mt-10 grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
+          {loading && !destacados
+            ? Array.from({ length: 4 }).map((_, i) => <StoryCardSkeleton key={i} />)
+            : destacados.map((r) => <StoryCard key={r.id} relato={r} />)}
+        </div>
+      )}
     </section>
   )
 }

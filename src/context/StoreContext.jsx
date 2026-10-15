@@ -1,0 +1,103 @@
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react'
+import { api } from '../api/client.js'
+
+// ============================================================================
+// StoreContext — estado compartido del flujo de revisión, sincronizado con la
+// API (cola de revisión, bitácora y estadísticas). El catálogo y el detalle
+// consultan la API directamente desde sus páginas.
+// ============================================================================
+
+const StoreContext = createContext(null)
+
+export function StoreProvider({ children }) {
+  const [pendientes, setPendientes] = useState([])
+  const [actividad, setActividad] = useState([])
+  const [estadisticas, setEstadisticas] = useState(null)
+  const [error, setError] = useState(null)
+  const [cargando, setCargando] = useState(true)
+
+  const refrescar = useCallback(async () => {
+    try {
+      const [p, a, e] = await Promise.all([
+        api.pendientes(),
+        api.actividad(),
+        api.estadisticas(),
+      ])
+      setPendientes(p)
+      setActividad(a)
+      setEstadisticas(e)
+      setError(null)
+    } catch (err) {
+      setError(err)
+    } finally {
+      setCargando(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    refrescar()
+  }, [refrescar])
+
+  const aprobar = useCallback(
+    async (id) => {
+      const relato = await api.aprobar(id)
+      await refrescar()
+      return relato
+    },
+    [refrescar]
+  )
+
+  const rechazar = useCallback(
+    async (id, motivo) => {
+      const relato = await api.rechazar(id, motivo)
+      await refrescar()
+      return relato
+    },
+    [refrescar]
+  )
+
+  const subirRelato = useCallback(
+    async (formData, onProgreso) => {
+      const relato = await api.subirRelato(formData, onProgreso)
+      await refrescar()
+      return relato
+    },
+    [refrescar]
+  )
+
+  const reiniciarDemo = useCallback(async () => {
+    await api.reiniciarDemo()
+    await refrescar()
+  }, [refrescar])
+
+  const value = useMemo(
+    () => ({
+      pendientes,
+      actividad,
+      estadisticas,
+      error,
+      cargando,
+      refrescar,
+      aprobar,
+      rechazar,
+      subirRelato,
+      reiniciarDemo,
+    }),
+    [pendientes, actividad, estadisticas, error, cargando, refrescar, aprobar, rechazar, subirRelato, reiniciarDemo]
+  )
+
+  return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>
+}
+
+export function useStore() {
+  const ctx = useContext(StoreContext)
+  if (!ctx) throw new Error('useStore debe usarse dentro de <StoreProvider>')
+  return ctx
+}

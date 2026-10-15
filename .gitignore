@@ -4,6 +4,10 @@ dist-ssr
 *.local
 .vite
 
+# Base de datos y archivos subidos (se generan al correr la API)
+server/data/
+server/storage/
+
 # Logs
 logs
 *.log
