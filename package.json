@@ -1,15 +1,17 @@
 {
   "name": "memoria-viva",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "type": "module",
   "engines": {
     "node": ">=22.13"
   },
   "scripts": {
-    "dev": "concurrently -k -n api,web -c yellow,cyan \"npm:dev:api\" \"npm:dev:web\"",
+    "dev": "concurrently -n api,web,ia -c yellow,cyan,magenta \"npm:dev:api\" \"npm:dev:web\" \"npm:dev:ia\"",
     "dev:web": "vite",
     "dev:api": "node --watch server/index.js",
+    "dev:ia": "node scripts/ia.js iniciar",
+    "ia:instalar": "node scripts/ia.js instalar",
     "build": "vite build",
     "preview": "vite preview",
     "start": "node server/index.js",

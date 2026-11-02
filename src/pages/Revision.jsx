@@ -3,26 +3,46 @@ import { Link } from 'react-router-dom'
 import RelatoMedia from '../components/RelatoMedia.jsx'
 import AiBadge from '../components/AiBadge.jsx'
 import ErrorBanner from '../components/ErrorBanner.jsx'
-import { useStore } from '../context/StoreContext.jsx'
+import { EN_PROCESO, useStore } from '../context/StoreContext.jsx'
 import { tipoLabel, tipoIcon } from '../data/mockData.js'
 import { etiquetaMedio, formatoBytes } from '../utils/formato.js'
 
-function PendingCard({ relato, onAprobar, onRechazar }) {
+const ETIQUETA_PROCESO = {
+  pendiente: 'En cola para la IA',
+  transcribiendo: 'Whisper está transcribiendo el audio',
+  clasificando: 'El modelo de lenguaje está clasificando el relato',
+}
+
+// Qué produjo el análisis: transcripción y clasificación.
+function fuenteIA(relato) {
+  const r = relato.revisionIA
+  const partes = []
+  if (relato.idioma) partes.push(`Transcripción: Whisper · idioma ${relato.idioma}`)
+  if (r?.fuente?.startsWith('ollama:')) partes.push(`Clasificación: ${r.fuente.slice(7)} (Ollama, local)`)
+  else if (r) partes.push('Clasificación: solo reglas')
+  return partes.join(' · ')
+}
+
+function PendingCard({ relato, onAprobar, onRechazar, onReprocesar }) {
   const [abierto, setAbierto] = useState(false)
   const [devolviendo, setDevolviendo] = useState(false)
   const [motivo, setMotivo] = useState('')
   const [ocupado, setOcupado] = useState(false)
   const [error, setError] = useState('')
 
-  const conf = Math.round((relato.revisionIA?.confianza ?? 0.9) * 100)
+  const revision = relato.revisionIA
+  const conf = Math.round((revision?.confianza ?? 0.9) * 100)
   const alerta = conf < 80
   const archivo = relato.archivo
+  const procesando = EN_PROCESO.includes(relato.procesamiento)
 
-  const ejecutar = async (accion) => {
+  // mantener: la tarjeta sigue en la cola tras la acción (p. ej. al reintentar).
+  const ejecutar = async (accion, { mantener = false } = {}) => {
     setOcupado(true)
     setError('')
     try {
       await accion()
+      if (mantener) setOcupado(false)
     } catch (err) {
       setError(err.message)
       setOcupado(false)
@@ -82,33 +102,76 @@ function PendingCard({ relato, onAprobar, onRechazar }) {
           )}
 
           {/* Pre-revisión de la IA */}
-          <div
-            className={`mt-3 rounded-lg border p-3 ${
-              alerta ? 'border-ocre/40 bg-ocre/10' : 'border-anil/25 bg-anil/5'
-            }`}
-          >
-            <div className="flex items-center justify-between">
-              <span className={`text-xs font-semibold ${alerta ? 'text-terracota-dark' : 'text-anil'}`}>
-                🤖 Pre-revisión de la IA {alerta && '· requiere atención'}
-              </span>
-              <span className={`text-xs font-semibold ${alerta ? 'text-terracota-dark' : 'text-anil'}`}>
-                {conf}% confianza
+          {procesando ? (
+            <div className="mt-3 flex items-center gap-3 rounded-lg border border-anil/25 bg-anil/5 p-3 text-xs text-anil">
+              <span className="h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-anil/30 border-t-anil" />
+              <span>
+                <strong className="font-semibold">{ETIQUETA_PROCESO[relato.procesamiento]}</strong>
+                {' — '}la aprobación se habilita cuando la IA termine.
               </span>
             </div>
-            <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-anil/15">
+          ) : relato.procesamiento === 'error' ? (
+            <div className="mt-3 rounded-lg border border-terracota/40 bg-terracota/5 p-3 text-xs">
+              <p className="font-semibold text-terracota">⚠ La IA no pudo procesar este relato</p>
+              <p className="mt-1 text-ink/70">{relato.procesamientoError}</p>
+              <button
+                disabled={ocupado}
+                onClick={() => ejecutar(() => onReprocesar(relato), { mantener: true })}
+                className="mt-2 font-semibold text-terracota hover:underline disabled:opacity-60"
+              >
+                ↻ Reintentar procesamiento
+              </button>
+            </div>
+          ) : (
+            relato.revisionIA && (
               <div
-                className={`h-full rounded-full ${alerta ? 'bg-ocre' : 'bg-anil'}`}
-                style={{ width: `${conf}%` }}
-              />
-            </div>
-            <ul className="mt-2 space-y-0.5">
-              {(relato.revisionIA?.sugerencias ?? []).map((s) => (
-                <li key={s} className="text-[11px] text-ink/70">
-                  • {s}
-                </li>
-              ))}
-            </ul>
-          </div>
+                className={`mt-3 rounded-lg border p-3 ${
+                  alerta ? 'border-ocre/40 bg-ocre/10' : 'border-anil/25 bg-anil/5'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className={`text-xs font-semibold ${alerta ? 'text-terracota-dark' : 'text-anil'}`}>
+                    🤖 Pre-revisión de la IA {alerta && '· requiere atención'}
+                  </span>
+                  <span className={`shrink-0 text-xs font-semibold ${alerta ? 'text-terracota-dark' : 'text-anil'}`}>
+                    {conf}% confianza
+                  </span>
+                </div>
+                <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-anil/15">
+                  <div
+                    className={`h-full rounded-full ${alerta ? 'bg-ocre' : 'bg-anil'}`}
+                    style={{ width: `${conf}%` }}
+                  />
+                </div>
+
+                {revision.resumen && (
+                  <p className="mt-2 text-xs italic text-ink/75">“{revision.resumen}”</p>
+                )}
+
+                <ul className="mt-2 space-y-0.5">
+                  {revision.sugerencias.map((s) => (
+                    <li key={s} className="text-[11px] text-ink/70">
+                      • {s}
+                    </li>
+                  ))}
+                </ul>
+
+                {revision.alertas?.length > 0 && (
+                  <ul className="mt-2 space-y-1 rounded-md bg-cream/70 p-2">
+                    {revision.alertas.map((a) => (
+                      <li key={a} className="text-[11px] text-terracota-dark">
+                        ⚠ {a}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                <p className="mt-2 text-[10px] uppercase tracking-wide text-ink/45">
+                  {fuenteIA(relato)}
+                </p>
+              </div>
+            )
+          )}
 
           {relato.transcripcion.length > 0 && (
             <>
@@ -159,9 +222,10 @@ function PendingCard({ relato, onAprobar, onRechazar }) {
           ) : (
             <div className="mt-4 flex flex-wrap gap-2">
               <button
-                disabled={ocupado}
+                disabled={ocupado || procesando}
                 onClick={() => ejecutar(() => onAprobar(relato))}
                 className="btn-selva !px-5 !py-2 disabled:opacity-60"
+                title={procesando ? 'Disponible cuando la IA termine' : undefined}
               >
                 {ocupado ? 'Guardando…' : '✓ Aprobar y publicar'}
               </button>
@@ -183,8 +247,17 @@ function PendingCard({ relato, onAprobar, onRechazar }) {
 }
 
 export default function Revision() {
-  const { pendientes, actividad, estadisticas, error, cargando, refrescar, aprobar, rechazar } =
-    useStore()
+  const {
+    pendientes,
+    actividad,
+    estadisticas,
+    error,
+    cargando,
+    refrescar,
+    aprobar,
+    rechazar,
+    reprocesar,
+  } = useStore()
   const [aviso, setAviso] = useState(null)
 
   const onAprobar = async (relato) => {
@@ -274,6 +347,7 @@ export default function Revision() {
                     key={r.id}
                     relato={r}
                     onAprobar={onAprobar}
+                    onReprocesar={(relato) => reprocesar(relato.id)}
                     onRechazar={onRechazar}
                   />
                 ))}

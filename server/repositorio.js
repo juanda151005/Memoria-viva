@@ -46,6 +46,9 @@ export function aRelato(row) {
     transcripcion: parseJson(row.transcripcion, []),
     revisionIA: parseJson(row.revision_ia, null),
     descripcion: row.descripcion,
+    procesamiento: row.procesamiento,
+    procesamientoError: row.procesamiento_error,
+    idioma: row.idioma,
     archivo: row.archivo_id
       ? {
           id: row.archivo_id,
@@ -66,12 +69,12 @@ export function createRepo(db) {
         id, titulo, comunidad, municipio, departamento, region, narrador, tipo,
         tematicas, epoca, fecha_registro, estado, publicado, publicado_en,
         duracion, ia_generada, palette, fragmento, transcripcion, revision_ia,
-        descripcion, consentimiento, archivo_id, creado_en
+        descripcion, consentimiento, archivo_id, creado_en, procesamiento
       ) VALUES (
         :id, :titulo, :comunidad, :municipio, :departamento, :region, :narrador, :tipo,
         :tematicas, :epoca, :fecha_registro, :estado, :publicado, :publicado_en,
         :duracion, :ia_generada, :palette, :fragmento, :transcripcion, :revision_ia,
-        :descripcion, :consentimiento, :archivo_id, :creado_en
+        :descripcion, :consentimiento, :archivo_id, :creado_en, :procesamiento
       )`),
     insertarArchivo: db.prepare(`
       INSERT INTO archivos (id, nombre_original, nombre_almacenado, mime, tipo_medio, tamano, sha256, creado_en)
@@ -101,7 +104,23 @@ export function createRepo(db) {
         (SELECT COUNT(DISTINCT comunidad) FROM relatos WHERE publicado = 1)    AS comunidades,
         (SELECT COUNT(DISTINCT departamento) FROM relatos WHERE publicado = 1) AS departamentos,
         (SELECT COUNT(*) FROM archivos)                                        AS archivos,
-        (SELECT COALESCE(SUM(tamano), 0) FROM archivos)                        AS bytes`),
+        (SELECT COALESCE(SUM(tamano), 0) FROM archivos)                        AS bytes,
+        (SELECT COUNT(*) FROM relatos
+          WHERE procesamiento IN ('pendiente', 'transcribiendo', 'clasificando')) AS procesando`),
+    marcarProcesamiento: db.prepare(
+      'UPDATE relatos SET procesamiento = ?, procesamiento_error = ?, actualizado_en = ? WHERE id = ?'
+    ),
+    guardarTranscripcion: db.prepare(`
+      UPDATE relatos SET transcripcion = :transcripcion, duracion = :duracion, idioma = :idioma,
+             fragmento = COALESCE(:fragmento, fragmento), actualizado_en = :ahora
+      WHERE id = :id`),
+    guardarClasificacion: db.prepare(
+      'UPDATE relatos SET region = ?, tematicas = ?, revision_ia = ?, actualizado_en = ? WHERE id = ?'
+    ),
+    porProcesar: db.prepare(
+      `SELECT id FROM relatos WHERE procesamiento IN ('pendiente', 'transcribiendo', 'clasificando')
+       ORDER BY creado_en ASC, rowid ASC`
+    ),
   }
 
   const obtener = (id) => {
@@ -171,6 +190,7 @@ export function createRepo(db) {
         consentimiento: r.consentimiento ? 1 : 0,
         archivo_id: r.archivoId ?? null,
         creado_en: r.creadoEn,
+        procesamiento: r.procesamiento ?? 'listo',
       })
       return obtener(r.id)
     },
@@ -206,6 +226,34 @@ export function createRepo(db) {
     },
 
     actividad: (limite = 20) => stmts.actividad.all(limite),
+
+    // --- Procesamiento con IA -------------------------------------------
+    marcarProcesamiento(id, estado, error = null) {
+      stmts.marcarProcesamiento.run(estado, error, new Date().toISOString(), id)
+    },
+
+    guardarTranscripcion(id, { transcripcion, duracion, idioma, fragmento = null }) {
+      stmts.guardarTranscripcion.run({
+        id,
+        transcripcion: JSON.stringify(transcripcion),
+        duracion,
+        idioma,
+        fragmento,
+        ahora: new Date().toISOString(),
+      })
+    },
+
+    guardarClasificacion(id, { region, tematicas, revisionIA }) {
+      stmts.guardarClasificacion.run(
+        region,
+        JSON.stringify(tematicas),
+        aJson(revisionIA),
+        new Date().toISOString(),
+        id
+      )
+    },
+
+    idsPorProcesar: () => stmts.porProcesar.all().map((r) => r.id),
 
     obtenerArchivo: (id) => stmts.obtenerArchivo.get(id) ?? null,
 

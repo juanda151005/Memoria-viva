@@ -165,8 +165,10 @@ export default function StoryDetail() {
                   ))}
                 </div>
                 <p className="mt-5 text-xs text-ink/50">
-                  Transcripción generada automáticamente y corregida por hablantes de la
-                  comunidad. Puede conservar giros propios de la oralidad.
+                  {relato.idioma
+                    ? `Transcrita automáticamente con Whisper (idioma detectado: ${relato.idioma}) y revisada por la comunidad.`
+                    : 'Transcripción generada automáticamente y corregida por hablantes de la comunidad.'}{' '}
+                  Puede conservar giros propios de la oralidad.
                 </p>
               </div>
             )}

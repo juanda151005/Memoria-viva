@@ -60,11 +60,25 @@ CREATE TABLE IF NOT EXISTS actividad (
 );
 `
 
+// Columnas agregadas después de la primera versión del esquema. Se añaden a
+// bases existentes sin perder datos.
+//   procesamiento: pendiente | transcribiendo | clasificando | listo | error
+const MIGRACIONES = [
+  ['procesamiento', "TEXT NOT NULL DEFAULT 'listo'"],
+  ['procesamiento_error', 'TEXT'],
+  ['idioma', 'TEXT'],
+]
+
 export function openDb(file) {
   if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true })
   const db = new DatabaseSync(file)
   db.exec('PRAGMA foreign_keys = ON')
   db.exec(SCHEMA)
+
+  const columnas = new Set(db.prepare('PRAGMA table_info(relatos)').all().map((c) => c.name))
+  for (const [nombre, definicion] of MIGRACIONES) {
+    if (!columnas.has(nombre)) db.exec(`ALTER TABLE relatos ADD COLUMN ${nombre} ${definicion}`)
+  }
   return db
 }
 

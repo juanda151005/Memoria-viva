@@ -6,7 +6,8 @@ import { createHash, randomUUID } from 'node:crypto'
 import { createRepo } from './repositorio.js'
 import { tx } from './db/database.js'
 import { seed } from './db/seed.js'
-import * as ia from './services/ia.js'
+import { ilustrar, regionDe, tipoMedio } from './services/ia.js'
+import { crearProcesador } from './services/procesador.js'
 import {
   departamentos,
   epocas,
@@ -16,14 +17,17 @@ import {
 
 // ============================================================================
 // API REST de Memoria Viva.
-// createApp() recibe la base de datos y la carpeta de almacenamiento, así las
-// pruebas pueden levantar una instancia aislada (BD en memoria + carpeta temporal).
+// createApp() recibe la base de datos, la carpeta de almacenamiento y el
+// servicio de IA; así las pruebas pueden levantar una instancia aislada
+// (BD en memoria, carpeta temporal y servicios de IA de prueba).
 // ============================================================================
 
 export const LIMITE_ARCHIVO = 500 * 1024 * 1024 // 500 MB
 
 const MIME_PERMITIDOS =
   /^(audio|video|image)\/|^application\/(pdf|msword|vnd\.openxmlformats-officedocument\.wordprocessingml\.document)$/
+
+const ENPROCESO = ['pendiente', 'transcribiendo', 'clasificando']
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -92,11 +96,12 @@ function validarRelato(b) {
   return errores
 }
 
-export function createApp({ db, uploadsDir, distDir } = {}) {
+export function createApp({ db, uploadsDir, distDir, ia } = {}) {
   const dirSubidas = path.resolve(uploadsDir)
   fs.mkdirSync(dirSubidas, { recursive: true })
 
   const repo = createRepo(db)
+  const procesador = crearProcesador({ repo, ia, uploadsDir: dirSubidas })
   const app = express()
   app.disable('x-powered-by')
   app.use(express.json({ limit: '100kb' }))
@@ -121,9 +126,15 @@ export function createApp({ db, uploadsDir, distDir } = {}) {
 
   // --- Rutas -----------------------------------------------------------------
 
-  app.get('/api/salud', (req, res) => {
+  app.get('/api/salud', async (req, res) => {
     const { n } = db.prepare('SELECT COUNT(*) AS n FROM relatos').get()
-    res.json({ ok: true, baseDeDatos: 'SQLite', relatos: n, version: '0.3.0' })
+    res.json({
+      ok: true,
+      baseDeDatos: 'SQLite',
+      relatos: n,
+      version: '0.4.0',
+      servicios: await ia.salud(),
+    })
   })
 
   // Catálogo público: solo relatos aprobados por la comunidad.
@@ -148,8 +159,9 @@ export function createApp({ db, uploadsDir, distDir } = {}) {
     res.json(relato)
   })
 
-  // Registro de un relato: guarda el archivo, corre el pipeline de IA y lo
-  // deja en la cola de revisión comunitaria (nunca se publica directamente).
+  // Registro de un relato: guarda el archivo y los datos, responde de inmediato
+  // (202) y deja la transcripción y clasificación en la cola de procesamiento.
+  // El relato queda en revisión comunitaria: nunca se publica directamente.
   app.post('/api/relatos', subida.single('archivo'), async (req, res) => {
     const b = req.body ?? {}
     const errores = validarRelato(b)
@@ -165,7 +177,7 @@ export function createApp({ db, uploadsDir, distDir } = {}) {
           nombreOriginal: nombreUtf8(req.file.originalname),
           nombreAlmacenado: req.file.filename,
           mime: req.file.mimetype,
-          tipoMedio: ia.tipoMedio(req.file.mimetype),
+          tipoMedio: tipoMedio(req.file.mimetype),
           tamano: req.file.size,
           sha256: await sha256(req.file.path),
           creadoEn: ahora,
@@ -176,22 +188,11 @@ export function createApp({ db, uploadsDir, distDir } = {}) {
     const tematicas = parsearTematicas(b.tematicas)
     const descripcion = texto(b.descripcion) || null
 
-    // Pipeline de IA (simulado; ver services/ia.js)
-    const transcripcion = ia.transcribir({ archivo, tipo: b.tipo, descripcion })
-    const { region, revisionIA } = ia.clasificar({
-      departamento: b.departamento,
-      tipo: b.tipo,
-      tematicas,
-      transcripcion,
-    })
-    const { iaGenerada, palette } = ia.ilustrar({ id, archivo })
-
-    const textoCompleto = transcripcion.join(' ')
-    const fragmento =
-      descripcion ??
-      (textoCompleto.length > 140
-        ? `${textoCompleto.slice(0, 140).trimEnd()}…`
-        : textoCompleto || null)
+    // Con audio o video, la transcripción la produce Whisper en segundo plano;
+    // sin audio, el texto disponible es la descripción escrita.
+    const conAudio = archivo && ['audio', 'video'].includes(archivo.tipoMedio)
+    const transcripcion = !conAudio && descripcion ? [descripcion] : []
+    const { iaGenerada, palette } = ilustrar({ id, archivo })
 
     try {
       const relato = tx(db, () => {
@@ -202,7 +203,7 @@ export function createApp({ db, uploadsDir, distDir } = {}) {
           comunidad: texto(b.comunidad),
           municipio: texto(b.municipio),
           departamento: b.departamento,
-          region,
+          region: regionDe(b.departamento),
           narrador: texto(b.narrador),
           tipo: b.tipo,
           tematicas,
@@ -212,18 +213,20 @@ export function createApp({ db, uploadsDir, distDir } = {}) {
           publicado: false,
           iaGenerada,
           palette,
-          fragmento,
+          fragmento: descripcion,
           transcripcion,
-          revisionIA,
+          revisionIA: null,
           descripcion,
           consentimiento: true,
           archivoId: archivo?.id ?? null,
           creadoEn: ahora,
+          procesamiento: 'pendiente',
         })
         repo.registrarActividad(`Nuevo relato recibido: "${creado.titulo}"`, id)
         return creado
       })
-      res.status(201).json(relato)
+      procesador.encolar(relato.id)
+      res.status(202).json(relato)
     } catch (err) {
       if (req.file) await fs.promises.unlink(req.file.path).catch(() => {})
       throw err
@@ -240,8 +243,31 @@ export function createApp({ db, uploadsDir, distDir } = {}) {
     const relato = repo.obtener(id)
     if (!relato) throw new HttpError(404, 'Relato no encontrado')
     if (relato.estado !== 'en_revision') throw new HttpError(409, 'Este relato ya fue revisado')
+    if (ENPROCESO.includes(relato.procesamiento)) {
+      throw new HttpError(409, 'El relato aún se está procesando con IA')
+    }
     return relato
   }
+
+  // Estado del procesamiento con IA de un relato recién registrado.
+  app.get('/api/procesamiento/:id', (req, res) => {
+    const relato = repo.obtener(req.params.id)
+    if (!relato) throw new HttpError(404, 'Relato no encontrado')
+    res.json(relato)
+  })
+
+  // Vuelve a intentar el procesamiento (por ejemplo, si Whisper estaba apagado).
+  app.post('/api/relatos/:id/reprocesar', (req, res) => {
+    const relato = repo.obtener(req.params.id)
+    if (!relato) throw new HttpError(404, 'Relato no encontrado')
+    if (relato.estado !== 'en_revision') throw new HttpError(409, 'Este relato ya fue revisado')
+    if (ENPROCESO.includes(relato.procesamiento)) {
+      throw new HttpError(409, 'El relato ya se está procesando')
+    }
+    repo.marcarProcesamiento(relato.id, 'pendiente')
+    procesador.encolar(relato.id)
+    res.status(202).json(repo.obtener(relato.id))
+  })
 
   app.post('/api/relatos/:id/aprobar', (req, res) => {
     const relato = pendienteOError(req.params.id)
@@ -335,5 +361,6 @@ export function createApp({ db, uploadsDir, distDir } = {}) {
     res.status(500).json({ error: 'Error interno del servidor' })
   })
 
+  app.locals.procesador = procesador
   return app
 }

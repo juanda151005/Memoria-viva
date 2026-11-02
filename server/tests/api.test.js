@@ -1,33 +1,98 @@
-import { test, before, after } from 'node:test'
+import { test, before, after, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import express from 'express'
+import multer from 'multer'
 import { openDb } from '../db/database.js'
 import { seed } from '../db/seed.js'
 import { createApp } from '../app.js'
+import { crearServicioIA } from '../services/ia.js'
 
-// Pruebas de integración de la API: cada corrida usa una base de datos en
-// memoria y una carpeta temporal, sin tocar los datos reales.
+// Pruebas de integración de la API. Cada corrida usa una base de datos en
+// memoria, una carpeta temporal y dos servidores falsos que imitan a Whisper
+// y a Ollama, para probar también el código que se comunica con ellos.
 
-let server
-let origen
 let tmp
+let app
+const servidores = []
 
+const levantar = (aplicacion) =>
+  new Promise((resolve) => {
+    const s = aplicacion.listen(0, '127.0.0.1', () => {
+      servidores.push(s)
+      resolve(`http://127.0.0.1:${s.address().port}`)
+    })
+  })
+
+// --- Whisper falso -----------------------------------------------------------
+const whisper = { modo: 'ok', recibidos: [], liberar: null }
+
+function whisperFalso() {
+  const w = express()
+  w.get('/salud', (req, res) => res.json({ ok: true, estado: 'listo', modelo: 'small' }))
+  w.post('/transcribir', multer().single('archivo'), async (req, res) => {
+    if (whisper.modo === 'apagado') return req.socket.destroy()
+    if (whisper.modo === 'cargando') {
+      whisper.modo = 'ok' // solo la primera vez
+      return res.status(503).json({ detail: 'cargando' })
+    }
+    if (whisper.modo === 'lento') await new Promise((r) => (whisper.liberar = r))
+    whisper.recibidos.push({ nombre: req.file.originalname, bytes: req.file.buffer })
+    res.json({
+      parrafos: ['Mi abuela cantaba bullerengue en la plaza.', 'Así aprendí el canto de mi gente.'],
+      idioma: 'es',
+      duracion: 65.2,
+      modelo: 'small',
+    })
+  })
+  return w
+}
+
+// --- Ollama falso ------------------------------------------------------------
+const ollama = { modo: 'ok', ultimaPeticion: null }
+
+function ollamaFalso() {
+  const o = express()
+  o.use(express.json())
+  o.get('/api/tags', (req, res) => res.json({ models: [{ name: 'mistral:latest' }] }))
+  o.post('/api/chat', (req, res) => {
+    if (ollama.modo === 'apagado') return req.socket.destroy()
+    ollama.ultimaPeticion = req.body
+    res.json({
+      message: {
+        content: JSON.stringify({
+          tipo: 'oralitura',
+          tematicas: ['Música y danza', 'Familia', 'Inventada'],
+          resumen: 'Una cantadora recuerda cómo aprendió el bullerengue.',
+          alertas: [],
+        }),
+      },
+    })
+  })
+  return o
+}
+
+let origen
 const api = (ruta, opciones) => fetch(`${origen}/api${ruta}`, opciones)
 const json = async (ruta, opciones) => (await api(ruta, opciones)).json()
+const procesado = async (id) => {
+  await app.locals.procesador.inactivo()
+  return json(`/procesamiento/${id}`)
+}
 
 function formulario(campos = {}, archivo) {
   const fd = new FormData()
   const base = {
-    titulo: 'El canto de la ballena en Bahía Solano',
-    comunidad: 'Pescadores de Bahía Solano',
-    narrador: 'Ana Mosquera',
-    departamento: 'Chocó',
-    municipio: 'Bahía Solano',
+    titulo: 'La danza del bullerengue en la plaza',
+    comunidad: 'Cantadoras de María la Baja',
+    narrador: 'Petrona Martínez',
+    departamento: 'Bolívar',
+    municipio: 'María la Baja',
     tipo: 'musica',
     epoca: 'Después de 2000',
-    tematicas: JSON.stringify(['Naturaleza', 'Territorio']),
+    tematicas: JSON.stringify(['Música y danza']),
     consentimiento: 'true',
     ...campos,
   }
@@ -36,27 +101,47 @@ function formulario(campos = {}, archivo) {
   return fd
 }
 
+const bytesAudio = Buffer.from('RIFF grabación de prueba — Memoria Viva')
+const conAudio = (campos) =>
+  api('/relatos', {
+    method: 'POST',
+    body: formulario(campos, { bytes: bytesAudio, mime: 'audio/wav', nombre: 'canción ñandú.wav' }),
+  })
+
 before(async () => {
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'memoria-viva-test-'))
+  const ia = crearServicioIA({
+    whisperUrl: await levantar(whisperFalso()),
+    ollamaUrl: await levantar(ollamaFalso()),
+    ollamaModelo: 'mistral',
+    reintentoMs: 20,
+  })
   const db = openDb(':memory:')
   seed(db)
-  const app = createApp({ db, uploadsDir: path.join(tmp, 'uploads') })
-  await new Promise((resolve) => {
-    server = app.listen(0, '127.0.0.1', resolve)
-  })
-  origen = `http://127.0.0.1:${server.address().port}`
+  app = createApp({ db, ia, uploadsDir: path.join(tmp, 'uploads') })
+  origen = await levantar(app)
+})
+
+beforeEach(() => {
+  whisper.modo = 'ok'
+  ollama.modo = 'ok'
 })
 
 after(() => {
-  server.closeAllConnections()
-  server.close()
+  for (const s of servidores) {
+    s.closeAllConnections()
+    s.close()
+  }
   fs.rmSync(tmp, { recursive: true, force: true })
 })
 
-test('GET /api/salud responde ok', async () => {
+// --- Catálogo ----------------------------------------------------------------
+
+test('GET /api/salud informa el estado de Whisper y del clasificador', async () => {
   const salud = await json('/salud')
   assert.equal(salud.ok, true)
-  assert.ok(salud.relatos > 0)
+  assert.equal(salud.servicios.whisper.ok, true)
+  assert.equal(salud.servicios.clasificador.ok, true)
 })
 
 test('el catálogo solo expone relatos publicados', async () => {
@@ -82,15 +167,13 @@ test('busca por texto libre', async () => {
 })
 
 test('un relato sin aprobar no es visible en el detalle público', async () => {
-  const res = await api('/relatos/pend-arrullo-guapi')
-  assert.equal(res.status, 404)
+  assert.equal((await api('/relatos/pend-arrullo-guapi')).status, 404)
 })
 
+// --- Registro y validación ---------------------------------------------------
+
 test('rechaza registros sin consentimiento comunitario (400)', async () => {
-  const res = await api('/relatos', {
-    method: 'POST',
-    body: formulario({ consentimiento: undefined }),
-  })
+  const res = await api('/relatos', { method: 'POST', body: formulario({ consentimiento: undefined }) })
   assert.equal(res.status, 400)
   assert.match((await res.json()).error, /consentimiento/)
 })
@@ -103,49 +186,111 @@ test('rechaza tipos de archivo no permitidos (415)', async () => {
   assert.equal(res.status, 415)
 })
 
+// --- Pipeline de IA ----------------------------------------------------------
+
 let relatoConAudio
-const bytesAudio = Buffer.from('ID3 grabación de prueba — Memoria Viva')
 
-test('registra un relato con audio, lo almacena y lo envía a revisión', async () => {
-  const res = await api('/relatos', {
-    method: 'POST',
-    body: formulario({}, { bytes: bytesAudio, mime: 'audio/mpeg', nombre: 'canción ñandú.mp3' }),
-  })
-  assert.equal(res.status, 201)
-  relatoConAudio = await res.json()
+test('un audio se guarda, se transcribe con Whisper y se clasifica con Ollama', async () => {
+  whisper.recibidos = []
+  const res = await conAudio()
+  assert.equal(res.status, 202)
+  const recibido = await res.json()
+  assert.equal(recibido.procesamiento, 'pendiente')
+  assert.equal(recibido.archivo.nombre, 'canción ñandú.wav')
 
-  assert.equal(relatoConAudio.estado, 'en_revision')
-  assert.equal(relatoConAudio.publicado, false)
-  assert.equal(relatoConAudio.region, 'Pacífico')
-  assert.equal(relatoConAudio.iaGenerada, true)
-  assert.ok(relatoConAudio.transcripcion.length > 0)
-  assert.equal(relatoConAudio.archivo.tipoMedio, 'audio')
-  assert.equal(relatoConAudio.archivo.nombre, 'canción ñandú.mp3')
+  relatoConAudio = await procesado(recibido.id)
+  assert.equal(relatoConAudio.procesamiento, 'listo')
 
-  // El archivo almacenado se puede recuperar byte a byte.
-  const archivo = await fetch(`${origen}${relatoConAudio.archivo.url}`)
-  assert.equal(archivo.status, 200)
-  assert.equal(archivo.headers.get('content-type'), 'audio/mpeg')
-  assert.deepEqual(Buffer.from(await archivo.arrayBuffer()), bytesAudio)
+  // Whisper recibió el mismo archivo que se almacenó.
+  assert.deepEqual(whisper.recibidos[0].bytes, bytesAudio)
+  const almacenado = await fetch(`${origen}${relatoConAudio.archivo.url}`)
+  assert.deepEqual(Buffer.from(await almacenado.arrayBuffer()), bytesAudio)
 
-  // Queda en la cola, no en el catálogo.
-  assert.ok((await json('/revision')).some((r) => r.id === relatoConAudio.id))
-  assert.ok(!(await json('/relatos')).some((r) => r.id === relatoConAudio.id))
+  // Resultado de Whisper.
+  assert.deepEqual(relatoConAudio.transcripcion, [
+    'Mi abuela cantaba bullerengue en la plaza.',
+    'Así aprendí el canto de mi gente.',
+  ])
+  assert.equal(relatoConAudio.duracion, '1:05')
+  assert.equal(relatoConAudio.idioma, 'es')
+  assert.match(relatoConAudio.fragmento, /^Mi abuela cantaba/)
+
+  // Resultado del clasificador, validado contra las listas permitidas.
+  const r = relatoConAudio.revisionIA
+  assert.equal(r.fuente, 'ollama:mistral')
+  assert.equal(r.tipoSugerido, 'oralitura')
+  assert.deepEqual(r.tematicasSugeridas, ['Música y danza', 'Familia'])
+  assert.ok(r.sugerencias.some((s) => /sugiere clasificarlo como Oralitura/.test(s)))
+  assert.ok(r.confianza < 0.95)
+  assert.ok(ollama.ultimaPeticion.format.properties.tipo.enum.includes('musica'))
+
+  // Sigue en la cola, no en el catálogo.
+  assert.ok((await json('/revision')).some((x) => x.id === recibido.id))
+  assert.ok(!(await json('/relatos')).some((x) => x.id === recibido.id))
 })
 
-test('una imagen original evita la ilustración generada por IA', async () => {
+test('espera a que Whisper termine de cargar el modelo y reintenta', async () => {
+  whisper.modo = 'cargando'
+  const { id } = await (await conAudio({ titulo: 'Relato con modelo cargando' })).json()
+  const relato = await procesado(id)
+  assert.equal(relato.procesamiento, 'listo')
+  assert.equal(relato.transcripcion.length, 2)
+})
+
+test('no se puede aprobar mientras la IA está procesando', async () => {
+  whisper.modo = 'lento'
+  const { id } = await (await conAudio({ titulo: 'Relato largo' })).json()
+  await new Promise((r) => setTimeout(r, 50))
+
+  assert.equal((await json(`/procesamiento/${id}`)).procesamiento, 'transcribiendo')
+  const res = await api(`/relatos/${id}/aprobar`, { method: 'POST' })
+  assert.equal(res.status, 409)
+
+  whisper.liberar()
+  assert.equal((await procesado(id)).procesamiento, 'listo')
+})
+
+test('si Whisper está apagado queda en error y se puede reprocesar', async () => {
+  whisper.modo = 'apagado'
+  const { id } = await (await conAudio({ titulo: 'Relato sin Whisper' })).json()
+  const conError = await procesado(id)
+  assert.equal(conError.procesamiento, 'error')
+  assert.match(conError.procesamientoError, /Whisper/)
+
+  whisper.modo = 'ok'
+  const res = await api(`/relatos/${id}/reprocesar`, { method: 'POST' })
+  assert.equal(res.status, 202)
+  assert.equal((await procesado(id)).procesamiento, 'listo')
+})
+
+test('si Ollama está apagado la clasificación usa solo las reglas', async () => {
+  ollama.modo = 'apagado'
+  const { id } = await (await conAudio({ titulo: 'Relato sin Ollama' })).json()
+  const relato = await procesado(id)
+  assert.equal(relato.procesamiento, 'listo')
+  assert.equal(relato.revisionIA.fuente, 'reglas')
+  assert.equal(relato.transcripcion.length, 2)
+})
+
+test('una imagen original no se transcribe ni se ilustra con IA', async () => {
+  whisper.recibidos = []
   const res = await api('/relatos', {
     method: 'POST',
     body: formulario(
-      { titulo: 'Mural del barrio', tipo: 'obra' },
+      { titulo: 'Mural del barrio', tipo: 'obra', descripcion: 'Mural pintado con los vecinos.' },
       { bytes: Buffer.from([0x89, 0x50, 0x4e, 0x47]), mime: 'image/png', nombre: 'mural.png' }
     ),
   })
-  assert.equal(res.status, 201)
-  const relato = await res.json()
+  assert.equal(res.status, 202)
+  const relato = await procesado((await res.json()).id)
   assert.equal(relato.iaGenerada, false)
   assert.equal(relato.archivo.tipoMedio, 'imagen')
+  assert.equal(whisper.recibidos.length, 0)
+  assert.deepEqual(relato.transcripcion, ['Mural pintado con los vecinos.'])
+  assert.equal(relato.procesamiento, 'listo')
 })
+
+// --- Revisión comunitaria ----------------------------------------------------
 
 test('aprobar publica el relato y deja rastro en la bitácora', async () => {
   const res = await api(`/relatos/${relatoConAudio.id}/aprobar`, { method: 'POST' })
@@ -156,11 +301,8 @@ test('aprobar publica el relato y deja rastro en la bitácora', async () => {
 
   assert.ok((await json('/relatos')).some((r) => r.id === relatoConAudio.id))
   assert.equal((await api(`/relatos/${relatoConAudio.id}`)).status, 200)
+  assert.match((await json('/actividad'))[0].texto, /Aprobado y publicado/)
 
-  const actividad = await json('/actividad')
-  assert.match(actividad[0].texto, /Aprobado y publicado/)
-
-  // No se puede aprobar dos veces.
   const repetido = await api(`/relatos/${relatoConAudio.id}/aprobar`, { method: 'POST' })
   assert.equal(repetido.status, 409)
 })
@@ -183,6 +325,6 @@ test('las estadísticas reflejan el estado de la base de datos', async () => {
   assert.equal(stats.publicados, (await json('/relatos')).length)
   assert.equal(stats.pendientes, (await json('/revision')).length)
   assert.equal(stats.devueltos, 1)
-  assert.equal(stats.archivos, 2)
-  assert.equal(stats.bytes, bytesAudio.length + 4)
+  assert.equal(stats.procesando, 0)
+  assert.equal(stats.archivos, 6)
 })

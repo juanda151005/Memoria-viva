@@ -8,6 +8,10 @@ dist-ssr
 server/data/
 server/storage/
 
+# Entorno de Python del servicio de transcripción
+ia-service/.venv/
+__pycache__/
+
 # Logs
 logs
 *.log

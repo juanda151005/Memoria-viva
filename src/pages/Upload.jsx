@@ -1,18 +1,29 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { Link } from 'react-router-dom'
-import { useStore } from '../context/StoreContext.jsx'
+import { api } from '../api/client.js'
+import { EN_PROCESO, useStore } from '../context/StoreContext.jsx'
 import { departamentos, tiposPatrimonio, tematicas, epocas } from '../data/mockData.js'
-import { formatoBytes } from '../utils/formato.js'
+import { formatoBytes, formatoDuracion } from '../utils/formato.js'
 
 const LIMITE_ARCHIVO = 500 * 1024 * 1024 // debe coincidir con server/app.js
 
 const steps = [
-  { id: 'sube', label: 'Subiendo al servidor', icon: '☁️', desc: 'Almacenamiento del archivo original' },
-  { id: 'transcribe', label: 'Transcribiendo audio', icon: '📝', desc: 'Modelo tipo Whisper' },
-  { id: 'clasifica', label: 'Clasificando en el catálogo', icon: '🗂️', desc: 'Región, tipo y temática' },
-  { id: 'ilustra', label: 'Generando ilustración', icon: '🎨', desc: 'Solo si no hay imagen o video' },
-  { id: 'listo', label: 'Guardado — listo para revisión', icon: '✅', desc: 'Espera aprobación comunitaria' },
+  { id: 'sube', label: 'Subiendo al servidor', icon: '☁️', desc: 'Archivo original guardado con su huella SHA-256' },
+  { id: 'transcribe', label: 'Transcribiendo con Whisper', icon: '📝', desc: 'Whisper corre localmente en el servidor' },
+  { id: 'clasifica', label: 'Clasificando con IA', icon: '🗂️', desc: 'Modelo de lenguaje local (Ollama)' },
+  { id: 'ilustra', label: 'Ilustración', icon: '🎨', desc: 'Solo si no hay imagen o video' },
+  { id: 'listo', label: 'Listo para revisión', icon: '✅', desc: 'Espera aprobación comunitaria' },
 ]
+
+const tieneAudio = (relato) => ['audio', 'video'].includes(relato?.archivo?.tipoMedio)
+
+// Paso del stepper que corresponde al estado del procesamiento en el servidor.
+function pasoSegunServidor(relato) {
+  const p = relato.procesamiento
+  if (p === 'listo') return 3
+  if (p === 'clasificando' || (p === 'pendiente' && !tieneAudio(relato))) return 2
+  return 1
+}
 
 const formularioVacio = {
   titulo: '',
@@ -118,21 +129,31 @@ function Field({ label, children, required }) {
 const inputCls =
   'w-full rounded-lg border border-arenaDark/60 bg-cream px-3.5 py-2.5 text-sm text-ink placeholder-ink/40 focus:border-terracota focus:outline-none focus:ring-2 focus:ring-terracota/20 disabled:opacity-60'
 
-// Descripción de cada paso según lo que respondió el servidor.
-function detallePaso(id, { progreso, file, resultado }) {
+// Descripción de cada paso según lo que reporta el servidor.
+function detallePaso(id, { activo, progreso, file, resultado, transcurrido }) {
   if (id === 'sube') {
     return file
       ? `${Math.round(progreso * 100)}% de ${formatoBytes(file.size)}`
       : 'Sin archivo adjunto: se guardan solo los datos'
   }
   if (!resultado) return null
-  const medio = resultado.archivo?.tipoMedio
-  if (id === 'transcribe' && !['audio', 'video'].includes(medio)) {
-    return 'Sin audio: se usa la descripción escrita'
+  const reloj = formatoDuracion(transcurrido)
+
+  if (id === 'transcribe') {
+    if (!tieneAudio(resultado)) return 'Sin audio: se usa la descripción escrita'
+    if (activo) {
+      return resultado.procesamiento === 'pendiente'
+        ? 'En cola: la IA está terminando otro relato…'
+        : `Whisper trabajando… ${reloj}`
+    }
+    return `${resultado.duracion} de audio transcritos · idioma: ${resultado.idioma ?? '—'}`
   }
   if (id === 'clasifica') {
-    const conf = Math.round((resultado.revisionIA?.confianza ?? 0) * 100)
-    return `Región ${resultado.region} · ${conf}% de confianza`
+    if (activo) return `El modelo está leyendo el relato… ${reloj}`
+    const r = resultado.revisionIA
+    if (!r) return null
+    const fuente = r.fuente === 'reglas' ? ' · solo reglas (Ollama apagado)' : ''
+    return `Región ${resultado.region} · ${Math.round(r.confianza * 100)}% de confianza${fuente}`
   }
   if (id === 'ilustra') {
     return resultado.iaGenerada
@@ -143,13 +164,15 @@ function detallePaso(id, { progreso, file, resultado }) {
   return null
 }
 
-function Stepper({ current, transcrito, progreso, file, resultado }) {
+function Stepper({ current, transcrito, progreso, file, resultado, transcurrido }) {
   return (
     <ol className="space-y-4">
       {steps.map((s, i) => {
         const done = i < current
         const active = i === current
-        const detalle = (done || active) && detallePaso(s.id, { progreso, file, resultado })
+        const detalle =
+          (done || active) &&
+          detallePaso(s.id, { activo: active, progreso, file, resultado, transcurrido })
         return (
           <li key={s.id} className="flex items-start gap-4">
             <div
@@ -180,11 +203,10 @@ function Stepper({ current, transcrito, progreso, file, resultado }) {
                 </div>
               )}
 
-              {/* Transcripción devuelta por el servidor, escrita en vivo */}
-              {s.id === 'transcribe' && (active || done) && transcrito && (
+              {/* Transcripción producida por Whisper */}
+              {s.id === 'transcribe' && done && transcrito && (
                 <p className="mt-2 rounded-lg border border-arena bg-paper p-3 font-serif text-xs italic leading-relaxed text-ink/75">
-                  “{transcrito}
-                  {active && <span className="animate-pulse">▍</span>}”
+                  “{transcrito}”
                 </p>
               )}
             </div>
@@ -196,20 +218,34 @@ function Stepper({ current, transcrito, progreso, file, resultado }) {
 }
 
 export default function Upload() {
-  const { subirRelato } = useStore()
+  const { subirRelato, reprocesar } = useStore()
 
   const [file, setFile] = useState(null)
   const [form, setForm] = useState(formularioVacio)
   const [error, setError] = useState('')
 
-  // fase: 'idle' | 'procesando' | 'listo'
+  // fase: 'idle' | 'subiendo' | 'procesando' | 'listo' | 'error'
   const [fase, setFase] = useState('idle')
   const [current, setCurrent] = useState(-1)
   const [progreso, setProgreso] = useState(0)
   const [resultado, setResultado] = useState(null)
   const [transcrito, setTranscrito] = useState('')
 
-  const ocupado = fase === 'procesando'
+  // Cronómetro del paso en curso (Whisper en CPU puede tardar con audios largos).
+  const [ahora, setAhora] = useState(Date.now())
+  const inicioPaso = useRef(Date.now())
+  useEffect(() => {
+    inicioPaso.current = Date.now()
+  }, [current])
+  useEffect(() => {
+    if (fase !== 'procesando') return
+    const iv = setInterval(() => setAhora(Date.now()), 1000)
+    return () => clearInterval(iv)
+  }, [fase])
+  const transcurrido = Math.max(0, (ahora - inicioPaso.current) / 1000)
+
+  const ocupado = fase === 'subiendo' || fase === 'procesando'
+  const bloqueado = fase !== 'idle'
 
   const upd = (k, v) => setForm((f) => ({ ...f, [k]: v }))
   const toggleTema = (t) =>
@@ -220,36 +256,59 @@ export default function Upload() {
         : [...f.tematicas, t],
     }))
 
-  // Texto que se "escribe" en el paso de transcripción (máx. 60 palabras).
-  const palabras = useMemo(() => {
-    if (!resultado) return []
-    const texto = resultado.transcripcion.join(' ') || 'Sin audio: no hay nada que transcribir.'
-    return texto.split(/\s+/).slice(0, 60)
-  }, [resultado])
-
-  // Avance de los pasos de IA una vez el servidor respondió.
+  // Consulta el avance en el servidor mientras la IA trabaja.
+  const enProceso = fase === 'procesando' && EN_PROCESO.includes(resultado?.procesamiento)
   useEffect(() => {
-    if (fase !== 'procesando' || current < 1) return
-    if (current >= steps.length) {
-      setFase('listo')
+    if (!enProceso) return
+    const iv = setInterval(() => {
+      api.procesamiento(resultado.id).then(setResultado).catch(() => {})
+    }, 1500)
+    return () => clearInterval(iv)
+  }, [enProceso, resultado?.id])
+
+  // Refleja en el stepper el estado reportado por el servidor.
+  useEffect(() => {
+    if (fase !== 'procesando' || !resultado) return
+    if (resultado.procesamiento === 'error') {
+      setFase('error')
       return
     }
-    const espera = current === 1 ? Math.max(1400, palabras.length * 45 + 400) : 1100
-    const t = setTimeout(() => setCurrent((c) => c + 1), espera)
-    return () => clearTimeout(t)
-  }, [fase, current, palabras])
+    const paso = pasoSegunServidor(resultado)
+    setCurrent((c) => Math.max(c, paso))
+  }, [fase, resultado])
 
-  // Escritura en vivo de la transcripción.
+  // Ilustración y cierre se resuelven en el servidor al instante; se muestran en secuencia.
   useEffect(() => {
-    if (current !== 1 || !palabras.length) return
+    if (fase !== 'procesando' || resultado?.procesamiento !== 'listo' || current < 3) return
+    const t = setTimeout(() => {
+      if (current + 1 >= steps.length) {
+        setCurrent(steps.length)
+        setFase('listo')
+      } else {
+        setCurrent(current + 1)
+      }
+    }, 900)
+    return () => clearTimeout(t)
+  }, [fase, resultado, current])
+
+  // La transcripción de Whisper se escribe en pantalla cuando llega (máx. 80 palabras).
+  const textoTranscripcion = tieneAudio(resultado) ? resultado.transcripcion.join(' ') : ''
+  const palabras = useMemo(
+    () => textoTranscripcion.split(/\s+/).filter(Boolean),
+    [textoTranscripcion]
+  )
+  useEffect(() => {
+    if (!palabras.length) return
+    const mostrar = palabras.slice(0, 80)
+    const sufijo = palabras.length > mostrar.length ? '…' : ''
     let i = 0
     const iv = setInterval(() => {
       i++
-      setTranscrito(palabras.slice(0, i).join(' '))
-      if (i >= palabras.length) clearInterval(iv)
-    }, 45)
+      setTranscrito(mostrar.slice(0, i).join(' ') + (i === mostrar.length ? sufijo : ''))
+      if (i >= mostrar.length) clearInterval(iv)
+    }, 35)
     return () => clearInterval(iv)
-  }, [current, palabras])
+  }, [palabras])
 
   const start = async (e) => {
     e.preventDefault()
@@ -280,17 +339,26 @@ export default function Upload() {
     setTranscrito('')
     setProgreso(0)
     setCurrent(0)
-    setFase('procesando')
+    setFase('subiendo')
 
     try {
       const relato = await subirRelato(datos, setProgreso)
       setProgreso(1)
       setResultado(relato)
-      setCurrent(1)
+      setFase('procesando')
     } catch (err) {
       setError(err.message)
       setFase('idle')
       setCurrent(-1)
+    }
+  }
+
+  const reintentar = async () => {
+    try {
+      setResultado(await reprocesar(resultado.id))
+      setFase('procesando')
+    } catch (err) {
+      setError(err.message)
     }
   }
 
@@ -300,6 +368,7 @@ export default function Upload() {
     setProgreso(0)
     setResultado(null)
     setTranscrito('')
+    setError('')
     setFile(null)
     setForm(formularioVacio)
   }
@@ -323,14 +392,14 @@ export default function Upload() {
         <div className="grid gap-10 lg:grid-cols-[1.5fr_1fr]">
           {/* Formulario */}
           <form onSubmit={start} className="space-y-8">
-            <fieldset disabled={ocupado || fase === 'listo'} className="space-y-8">
+            <fieldset disabled={bloqueado} className="space-y-8">
               <div>
                 <h2 className="font-serif text-2xl font-600 text-ink">1. El archivo</h2>
                 <p className="mt-1 text-sm text-ink/60">
                   Audio, video, foto o documento con el relato.
                 </p>
                 <div className="mt-4">
-                  <DropZone file={file} setFile={setFile} disabled={ocupado || fase === 'listo'} />
+                  <DropZone file={file} setFile={setFile} disabled={bloqueado} />
                 </div>
               </div>
 
@@ -493,7 +562,7 @@ export default function Upload() {
               </p>
             )}
 
-            {fase !== 'listo' && (
+            {(fase === 'idle' || ocupado) && (
               <button
                 type="submit"
                 disabled={ocupado}
@@ -521,8 +590,28 @@ export default function Upload() {
                   progreso={progreso}
                   file={file}
                   resultado={resultado}
+                  transcurrido={transcurrido}
                 />
               </div>
+
+              {fase === 'error' && (
+                <div role="alert" className="mt-6 rounded-xl border border-terracota/40 bg-terracota/5 p-4">
+                  <p className="font-semibold text-terracota">La IA no pudo procesar el relato</p>
+                  <p className="mt-1 text-xs text-ink/70">{resultado?.procesamientoError}</p>
+                  <p className="mt-2 text-xs text-ink/60">
+                    El relato y el archivo ya están guardados. Puedes reintentar ahora o más tarde
+                    desde el panel de revisión.
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button onClick={reintentar} className="btn-primary !px-4 !py-2">
+                      Reintentar
+                    </button>
+                    <button onClick={reset} className="btn-ghost !px-4 !py-2">
+                      Subir otro
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {fase === 'listo' && (
                 <div className="mt-6 rounded-xl bg-selva/10 p-4 text-center">
@@ -534,6 +623,13 @@ export default function Upload() {
                     El relato quedó en la base de datos, en la cola de revisión. Una persona
                     de la comunidad lo revisará antes de publicarlo.
                   </p>
+                  {resultado?.revisionIA?.alertas?.length > 0 && (
+                    <p className="mt-2 rounded-lg bg-ocre/15 px-3 py-2 text-xs font-medium text-terracota-dark">
+                      ⚠ La IA marcó {resultado.revisionIA.alertas.length}{' '}
+                      {resultado.revisionIA.alertas.length === 1 ? 'alerta' : 'alertas'} de
+                      contenido sensible para el revisor.
+                    </p>
+                  )}
                   <div className="mt-4 flex flex-col gap-2">
                     <Link to="/revision" className="btn-selva !px-4 !py-2">
                       Ver panel de revisión →
@@ -547,9 +643,9 @@ export default function Upload() {
 
               {fase === 'idle' && (
                 <p className="mt-6 text-xs text-ink/45">
-                  El archivo y los datos se guardan en el servidor. La transcripción,
-                  clasificación e ilustración aún son simuladas: la integración con modelos
-                  reales es la siguiente fase.
+                  Todo corre en el servidor de la plataforma: Whisper transcribe el audio y un
+                  modelo de lenguaje local propone la clasificación. Ningún archivo se envía a
+                  servicios externos.
                 </p>
               )}
             </div>

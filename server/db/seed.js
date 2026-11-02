@@ -1,6 +1,6 @@
 import { relatos, relatosPendientesSeed } from '../../src/data/mockData.js'
 import { createRepo } from '../repositorio.js'
-import { clasificar } from '../services/ia.js'
+import { clasificarConReglas } from '../services/ia.js'
 import { tx } from './database.js'
 
 // Carga los relatos de ejemplo. Los revisados quedan publicados; los que
@@ -17,7 +17,7 @@ export function seed(db) {
         publicado,
         publicadoEn: publicado ? ahora : null,
         consentimiento: true,
-        revisionIA: r.revisionIA ?? clasificar(r).revisionIA,
+        revisionIA: r.revisionIA ?? clasificarConReglas(r).revisionIA,
         creadoEn: ahora,
       })
     }

@@ -16,6 +16,9 @@ import { api } from '../api/client.js'
 
 const StoreContext = createContext(null)
 
+// Estados en los que la IA todavía está trabajando sobre un relato.
+export const EN_PROCESO = ['pendiente', 'transcribiendo', 'clasificando']
+
 export function StoreProvider({ children }) {
   const [pendientes, setPendientes] = useState([])
   const [actividad, setActividad] = useState([])
@@ -45,6 +48,15 @@ export function StoreProvider({ children }) {
     refrescar()
   }, [refrescar])
 
+  // Mientras haya relatos procesándose con IA, se consulta la API cada 3 s
+  // para que la cola refleje cuándo terminan.
+  const hayEnProceso = pendientes.some((r) => EN_PROCESO.includes(r.procesamiento))
+  useEffect(() => {
+    if (!hayEnProceso) return
+    const iv = setInterval(refrescar, 3000)
+    return () => clearInterval(iv)
+  }, [hayEnProceso, refrescar])
+
   const aprobar = useCallback(
     async (id) => {
       const relato = await api.aprobar(id)
@@ -72,6 +84,15 @@ export function StoreProvider({ children }) {
     [refrescar]
   )
 
+  const reprocesar = useCallback(
+    async (id) => {
+      const relato = await api.reprocesar(id)
+      await refrescar()
+      return relato
+    },
+    [refrescar]
+  )
+
   const reiniciarDemo = useCallback(async () => {
     await api.reiniciarDemo()
     await refrescar()
@@ -88,9 +109,22 @@ export function StoreProvider({ children }) {
       aprobar,
       rechazar,
       subirRelato,
+      reprocesar,
       reiniciarDemo,
     }),
-    [pendientes, actividad, estadisticas, error, cargando, refrescar, aprobar, rechazar, subirRelato, reiniciarDemo]
+    [
+      pendientes,
+      actividad,
+      estadisticas,
+      error,
+      cargando,
+      refrescar,
+      aprobar,
+      rechazar,
+      subirRelato,
+      reprocesar,
+      reiniciarDemo,
+    ]
   )
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>

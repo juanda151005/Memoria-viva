@@ -1,7 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../api/client.js'
-import { useApi } from '../hooks/useApi.js'
 import { useStore } from '../context/StoreContext.jsx'
 import { formatoBytes } from '../utils/formato.js'
 
@@ -11,12 +10,12 @@ const componentes = [
   { nombre: 'Concepto, flujo y principios éticos', peso: 10, logrado: 10, nota: 'Completo' },
   { nombre: 'Diseño, UX e interfaz (6 vistas)', peso: 20, logrado: 20, nota: 'Completo' },
   { nombre: 'Flujo funcional de punta a punta', peso: 8, logrado: 8, nota: 'Completo' },
-  { nombre: 'Backend, base de datos y almacenamiento', peso: 15, logrado: 15, nota: 'Completo en esta entrega' },
-  { nombre: 'Transcripción real (Whisper)', peso: 12, logrado: 0, nota: 'Punto de integración listo' },
-  { nombre: 'Clasificación automática (NLP)', peso: 10, logrado: 0, nota: 'Punto de integración listo' },
-  { nombre: 'Ilustraciones texto-a-imagen', peso: 8, logrado: 0, nota: 'Punto de integración listo' },
+  { nombre: 'Backend, base de datos y almacenamiento', peso: 15, logrado: 15, nota: 'Completo' },
+  { nombre: 'Transcripción real (Whisper)', peso: 12, logrado: 12, nota: 'Completo en esta entrega: faster-whisper local' },
+  { nombre: 'Clasificación automática (NLP)', peso: 10, logrado: 10, nota: 'Completo en esta entrega: LLM local (Ollama) + reglas' },
+  { nombre: 'Ilustraciones texto-a-imagen', peso: 8, logrado: 0, nota: 'Hoy: ilustración generativa SVG' },
   { nombre: 'Autenticación por roles y moderación', peso: 7, logrado: 3, nota: 'Moderación persistida; falta autenticación' },
-  { nombre: 'Despliegue, seguridad, pruebas y piloto', peso: 10, logrado: 2, nota: '12 pruebas automatizadas y validación' },
+  { nombre: 'Despliegue, seguridad, pruebas y piloto', peso: 10, logrado: 2, nota: '16 pruebas automatizadas y validación' },
 ]
 
 const progreso = componentes.reduce((total, c) => total + c.logrado, 0)
@@ -38,63 +37,63 @@ const fases = [
       'Sistema de diseño con identidad cultural',
       '6 vistas navegables y responsive',
       'Flujo funcional con moderación humana',
-      'Simulación del pipeline de IA',
     ],
   },
   {
-    nombre: 'Fase 3 — Backend, base de datos y almacenamiento (entrega actual)',
+    nombre: 'Fase 3 — Backend, base de datos y almacenamiento',
     estado: 'completado',
     items: [
-      'API REST con Express (10 endpoints)',
+      'API REST con Express',
       'Base de datos SQLite con esquema relacional',
       'Almacenamiento de archivos con hash SHA-256',
       'Validación de datos y consentimiento en el servidor',
-      'Bitácora de actividad auditable',
-      '12 pruebas automatizadas de integración',
     ],
   },
   {
-    nombre: 'Fase 4 — Integración de IA real',
+    nombre: 'Fase 4 — Integración de IA real (entrega actual)',
+    estado: 'completado',
+    items: [
+      'Transcripción con Whisper local (faster-whisper, modelo small)',
+      'Clasificación con modelo de lenguaje local (Mistral en Ollama)',
+      'Detección de saberes restringidos y datos personales (LLM + reglas)',
+      'Procesamiento en segundo plano con estado en vivo y reintentos',
+      '100% local y gratuito: los audios no salen del servidor',
+    ],
+  },
+  {
+    nombre: 'Fase 5 — Ilustraciones, cuentas, despliegue y piloto',
     estado: 'siguiente',
     items: [
-      'Transcripción con Whisper (ASR)',
-      'Clasificación por región, tipo y temática (NLP)',
-      'Generación de ilustraciones (texto-a-imagen)',
-      'Detección de saberes restringidos y datos personales',
-    ],
-  },
-  {
-    nombre: 'Fase 5 — Cuentas, despliegue y piloto',
-    estado: 'pendiente',
-    items: [
+      'Ilustraciones con modelo texto-a-imagen',
       'Autenticación por roles (comunidad, revisor, público)',
-      'Migración a PostgreSQL y almacenamiento en la nube',
-      'Despliegue público',
+      'Migración a PostgreSQL, almacenamiento en la nube y despliegue',
       'Piloto con una comunidad real',
     ],
   },
 ]
 
 const arquitectura = [
-  { icon: '🎙️', titulo: 'Captura', tec: 'Web / móvil', desc: 'La comunidad sube audio, video, foto o documento.' },
-  { icon: '☁️', titulo: 'Almacenamiento', tec: 'Multer + SHA-256', desc: 'El archivo original se guarda con un nombre seguro y su huella digital.' },
-  { icon: '📝', titulo: 'Transcripción (ASR)', tec: 'Whisper', desc: 'El audio se convierte a texto con segmentación por tiempo.' },
-  { icon: '🗂️', titulo: 'Clasificación (NLP)', tec: 'LLM + reglas', desc: 'Se infieren región, tipo y temáticas, y se marcan contenidos sensibles.' },
-  { icon: '🎨', titulo: 'Ilustración', tec: 'Texto-a-imagen', desc: 'Solo si no hay foto o video original; siempre marcada como IA.' },
-  { icon: '✅', titulo: 'Moderación humana', tec: 'Human-in-the-loop', desc: 'La comunidad aprueba o devuelve con motivo antes de publicar.' },
+  { icon: '🎙️', titulo: 'Captura', tec: 'Web / móvil', desc: 'La comunidad sube audio, video, foto o documento.', real: true },
+  { icon: '☁️', titulo: 'Almacenamiento', tec: 'Multer + SHA-256', desc: 'El archivo original se guarda con un nombre seguro y su huella digital.', real: true },
+  { icon: '📝', titulo: 'Transcripción (ASR)', tec: 'Whisper local', desc: 'faster-whisper convierte el audio a texto en el propio servidor, sin enviarlo a terceros.', real: true },
+  { icon: '🗂️', titulo: 'Clasificación (NLP)', tec: 'Mistral (Ollama) + reglas', desc: 'Un modelo de lenguaje local propone tipo, temáticas y resumen, y marca contenidos sensibles.', real: true },
+  { icon: '🎨', titulo: 'Ilustración', tec: 'Generativa (SVG)', desc: 'Solo si no hay foto o video original; siempre marcada como IA. Texto-a-imagen: siguiente fase.', real: false },
+  { icon: '✅', titulo: 'Moderación humana', tec: 'Human-in-the-loop', desc: 'La comunidad aprueba o devuelve con motivo; la IA nunca publica sola.', real: true },
 ]
 
 const endpoints = [
   ['GET', '/api/relatos', 'Catálogo público con filtros y búsqueda'],
   ['GET', '/api/relatos/:id', 'Detalle de un relato publicado'],
-  ['POST', '/api/relatos', 'Registro de relato + archivo y pipeline de IA'],
+  ['POST', '/api/relatos', 'Registro de relato + archivo; encola el procesamiento con IA'],
+  ['GET', '/api/procesamiento/:id', 'Estado del procesamiento con IA'],
+  ['POST', '/api/relatos/:id/reprocesar', 'Reintentar el procesamiento con IA'],
   ['GET', '/api/revision', 'Cola de revisión comunitaria'],
   ['POST', '/api/relatos/:id/aprobar', 'Aprobar y publicar'],
   ['POST', '/api/relatos/:id/rechazar', 'Devolver a la comunidad con motivo'],
   ['GET', '/api/archivos/:id', 'Archivo original (con streaming)'],
   ['GET', '/api/estadisticas', 'Métricas del sistema'],
   ['GET', '/api/actividad', 'Bitácora de actividad'],
-  ['GET', '/api/salud', 'Estado del servicio'],
+  ['GET', '/api/salud', 'Estado de la API, Whisper y el clasificador'],
 ]
 
 const tablas = [
@@ -116,13 +115,13 @@ const tablas = [
 ]
 
 const changelog = [
-  'API REST con Express: catálogo, registro, revisión, archivos y métricas.',
-  'Base de datos SQLite: los relatos, archivos y la bitácora ya persisten.',
-  'Subida real de archivos con barra de progreso y huella SHA-256.',
-  'Reproducción del audio, foto o video original desde el servidor.',
-  'Devolución de relatos con motivo y bitácora guardada en la BD.',
-  'Pipeline de IA trasladado al servidor, listo para conectar modelos reales.',
-  '12 pruebas automatizadas de la API (npm test).',
+  'Transcripción real con Whisper local (faster-whisper) en un servicio Python.',
+  'Clasificación con un modelo de lenguaje local (Mistral vía Ollama): tipo, temáticas, resumen y alertas.',
+  'El modelo da una segunda opinión independiente: no conoce el tipo registrado.',
+  'Procesamiento en segundo plano, con estado en vivo, cola y reintento si un servicio falla.',
+  'Si Ollama no está disponible, la clasificación sigue funcionando solo con reglas.',
+  'No se puede aprobar un relato hasta que la IA termine de procesarlo.',
+  '16 pruebas automatizadas, incluidas las de comunicación con Whisper y Ollama.',
 ]
 
 const estadoStyle = {
@@ -140,15 +139,61 @@ function Metric({ valor, label }) {
   )
 }
 
+const ESTADO_SERVICIO = {
+  listo: ['bg-selva', 'Listo'],
+  cargando: ['animate-pulse bg-ocre', 'Cargando modelo…'],
+  'sin-modelo': ['bg-ocre', 'Modelo no instalado en Ollama'],
+}
+
+function ServicioIA({ nombre, servicio, apagado }) {
+  const [punto, texto] = ESTADO_SERVICIO[servicio.estado] ?? ['bg-terracota', apagado]
+  return (
+    <div className="card flex items-center gap-3 px-4 py-3">
+      <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${punto}`} />
+      <div className="min-w-0">
+        <p className="text-sm font-semibold text-ink">
+          {nombre}
+          {servicio.modelo && (
+            <span className="ml-2 font-mono text-xs font-normal text-ink/55">{servicio.modelo}</span>
+          )}
+        </p>
+        <p className="text-xs text-ink/55">{texto}</p>
+      </div>
+    </div>
+  )
+}
+
 const colorMetodo = { GET: 'bg-selva/10 text-selva', POST: 'bg-terracota/10 text-terracota' }
 
 export default function Avance() {
-  const { estadisticas, reiniciarDemo } = useStore()
+  const { estadisticas, reiniciarDemo, refrescar } = useStore()
   const [intento, setIntento] = useState(0)
-  const salud = useApi(() => api.salud(), [intento])
+  const [salud, setSalud] = useState({ data: null, loading: true })
   const [reiniciando, setReiniciando] = useState(false)
 
-  const enLinea = salud.data?.ok
+  // Se consulta la salud de la API cada 10 s: si se cae y vuelve (por ejemplo,
+  // al reiniciar el servidor), el indicador se recupera solo.
+  useEffect(() => {
+    let vigente = true
+    const consultar = () =>
+      api
+        .salud()
+        .then((data) => vigente && setSalud({ data, loading: false }))
+        .catch(() => vigente && setSalud({ data: null, loading: false }))
+    consultar()
+    const iv = setInterval(consultar, 10000)
+    return () => {
+      vigente = false
+      clearInterval(iv)
+    }
+  }, [intento])
+
+  const enLinea = Boolean(salud.data?.ok)
+
+  // Al recuperar la conexión, las métricas se vuelven a pedir a la API.
+  useEffect(() => {
+    if (enLinea) refrescar()
+  }, [enLinea, refrescar])
 
   const reiniciar = async () => {
     if (!window.confirm('¿Reiniciar los datos de demostración? Se borrarán los relatos y archivos subidos.')) return
@@ -189,8 +234,8 @@ export default function Avance() {
               />
             </div>
             <p className="mt-2 text-xs text-ink/55">
-              Fase actual: <strong>Backend, base de datos y almacenamiento</strong> — completada
-              en esta entrega. Siguiente: integración de IA real.
+              Fase actual: <strong>Integración de IA real</strong> (Whisper + modelo de lenguaje
+              local) — completada en esta entrega. Siguiente: ilustraciones, cuentas y despliegue.
             </p>
           </div>
         </div>
@@ -222,7 +267,26 @@ export default function Avance() {
                 : 'API sin conexión'}
             </span>
           </div>
-          <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-4">
+
+          {enLinea && salud.data.servicios && (
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <ServicioIA
+                nombre="Transcripción"
+                servicio={salud.data.servicios.whisper}
+                apagado='Apagado: inícialo con "npm run dev:ia"'
+              />
+              <ServicioIA
+                nombre="Clasificación"
+                servicio={salud.data.servicios.clasificador}
+                apagado="Ollama apagado: se clasifica solo con reglas"
+              />
+            </div>
+          )}
+          <div
+            className={`mt-6 grid grid-cols-2 gap-4 transition-opacity sm:grid-cols-4 ${
+              !salud.loading && !enLinea ? 'opacity-50' : ''
+            }`}
+          >
             <Metric valor={estadisticas?.publicados ?? '—'} label="relatos publicados" />
             <Metric valor={estadisticas?.pendientes ?? '—'} label="en cola de revisión" />
             <Metric valor={estadisticas?.archivos ?? '—'} label="archivos almacenados" />
@@ -241,7 +305,8 @@ export default function Avance() {
           <h2 className="font-serif text-2xl font-600 text-ink">¿De dónde sale el {progreso}%?</h2>
           <p className="mt-2 max-w-2xl text-ink/70">
             Cada componente pesa según el esfuerzo que representa dentro del producto
-            completo. Lo ya construido es la base; lo más costoso que falta es la IA real.
+            completo. Ya funcionan la base y la IA real; falta lo que lleva el producto a
+            producción.
           </p>
           <div className="card mt-6 overflow-x-auto">
             <table className="w-full min-w-[560px] text-sm">
@@ -296,12 +361,13 @@ export default function Avance() {
           <h2 className="font-serif text-2xl font-600 text-ink">Arquitectura del sistema</h2>
 
           {/* Capas */}
-          <div className="mt-6 grid items-stretch gap-3 md:grid-cols-[1fr_auto_1fr_auto_1fr]">
+          <div className="mt-6 grid items-stretch gap-3 lg:grid-cols-[1fr_auto_1fr_auto_1fr_auto_1fr]">
             {[
               ['🖥️', 'Frontend', 'React + Vite + Tailwind', '6 vistas, cliente HTTP con progreso de subida'],
-              ['⚙️', 'API REST', 'Node.js + Express', 'Validación, pipeline de IA y moderación'],
+              ['⚙️', 'API REST', 'Node.js + Express', 'Validación, cola de procesamiento y moderación'],
+              ['🧠', 'IA local', 'Whisper + Ollama', 'Transcripción y clasificación en el propio equipo'],
               ['🗄️', 'Datos', 'SQLite + disco', 'Relatos, archivos originales y bitácora'],
-            ].map(([icon, titulo, tec, desc], i) => (
+            ].map(([icon, titulo, tec, desc], i, capas) => (
               <div key={titulo} className="contents">
                 <div className="card p-5">
                   <div className="text-2xl">{icon}</div>
@@ -311,10 +377,10 @@ export default function Avance() {
                   </span>
                   <p className="mt-2 text-sm text-ink/70">{desc}</p>
                 </div>
-                {i < 2 && (
+                {i < capas.length - 1 && (
                   <div className="grid place-items-center text-2xl text-arenaDark">
-                    <span className="hidden md:inline">→</span>
-                    <span className="md:hidden">↓</span>
+                    <span className="hidden lg:inline">→</span>
+                    <span className="lg:hidden">↓</span>
                   </div>
                 )}
               </div>
@@ -324,13 +390,13 @@ export default function Avance() {
           {/* Pipeline */}
           <h3 className="mt-10 font-serif text-xl font-600 text-ink">Pipeline de un relato</h3>
           <p className="mt-1 max-w-2xl text-sm text-ink/70">
-            Captura y almacenamiento ya son reales. Transcripción, clasificación e ilustración
-            corren simuladas en el servidor (server/services/ia.js) con su firma definitiva,
-            listas para conectar los modelos.
+            Captura, almacenamiento, transcripción, clasificación y moderación ya son reales y
+            corren en local, sin costo y sin enviar los audios a terceros. La ilustración es
+            generativa por ahora; el modelo texto-a-imagen es la siguiente fase.
           </p>
           <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {arquitectura.map((a, i) => (
-              <div key={a.titulo} className="card relative p-5">
+              <div key={a.titulo} className={`card relative p-5 ${a.real ? '' : 'border-dashed'}`}>
                 <span className="absolute right-4 top-4 font-serif text-2xl font-700 text-arena">
                   {String(i + 1).padStart(2, '0')}
                 </span>
@@ -437,6 +503,8 @@ export default function Avance() {
               <li>• Node.js + Express 5 — API REST</li>
               <li>• SQLite (node:sqlite) — base de datos relacional embebida</li>
               <li>• Multer — subida y almacenamiento de archivos</li>
+              <li>• Python + faster-whisper — transcripción local</li>
+              <li>• Ollama + Mistral 7B — clasificación local</li>
               <li>• node:test — pruebas automatizadas de integración</li>
             </ul>
             <div className="mt-6 flex flex-wrap gap-2">
