@@ -7,11 +7,13 @@ import {
   useState,
 } from 'react'
 import { api } from '../api/client.js'
+import { useAuth } from './AuthContext.jsx'
 
 // ============================================================================
 // StoreContext — estado compartido del flujo de revisión, sincronizado con la
-// API (cola de revisión, bitácora y estadísticas). El catálogo y el detalle
-// consultan la API directamente desde sus páginas.
+// API. Las estadísticas son públicas; la cola de revisión y la bitácora solo
+// se cargan con una sesión de revisor o administrador. El catálogo y el
+// detalle consultan la API directamente desde sus páginas.
 // ============================================================================
 
 const StoreContext = createContext(null)
@@ -20,6 +22,7 @@ const StoreContext = createContext(null)
 export const EN_PROCESO = ['pendiente', 'transcribiendo', 'clasificando']
 
 export function StoreProvider({ children }) {
+  const { puedeRevisar, cargando: cargandoSesion, verificar } = useAuth()
   const [pendientes, setPendientes] = useState([])
   const [actividad, setActividad] = useState([])
   const [estadisticas, setEstadisticas] = useState(null)
@@ -28,25 +31,27 @@ export function StoreProvider({ children }) {
 
   const refrescar = useCallback(async () => {
     try {
-      const [p, a, e] = await Promise.all([
-        api.pendientes(),
-        api.actividad(),
+      const [e, p, a] = await Promise.all([
         api.estadisticas(),
+        puedeRevisar ? api.pendientes() : [],
+        puedeRevisar ? api.actividad() : [],
       ])
+      setEstadisticas(e)
       setPendientes(p)
       setActividad(a)
-      setEstadisticas(e)
       setError(null)
     } catch (err) {
-      setError(err)
+      // 401: la sesión venció; se vuelve a consultar quién está conectado.
+      if (err.status === 401) verificar()
+      else setError(err)
     } finally {
       setCargando(false)
     }
-  }, [])
+  }, [puedeRevisar, verificar])
 
   useEffect(() => {
-    refrescar()
-  }, [refrescar])
+    if (!cargandoSesion) refrescar()
+  }, [cargandoSesion, refrescar])
 
   // Mientras haya relatos procesándose con IA, se consulta la API cada 3 s
   // para que la cola refleje cuándo terminan.

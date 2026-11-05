@@ -58,6 +58,27 @@ CREATE TABLE IF NOT EXISTS actividad (
   relato_id TEXT,
   fecha     TEXT NOT NULL
 );
+
+-- Cuentas de las personas revisoras y administradoras. La contraseña se guarda
+-- solo como hash (scrypt con sal aleatoria).
+CREATE TABLE IF NOT EXISTS usuarios (
+  id             TEXT PRIMARY KEY,
+  nombre         TEXT NOT NULL,
+  correo         TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  clave_hash     TEXT NOT NULL,
+  rol            TEXT NOT NULL CHECK (rol IN ('revisor', 'admin')),
+  activo         INTEGER NOT NULL DEFAULT 1,
+  creado_en      TEXT NOT NULL,
+  ultimo_ingreso TEXT
+);
+
+-- El id es el hash SHA-256 del token: el token en claro solo vive en la cookie.
+CREATE TABLE IF NOT EXISTS sesiones (
+  id         TEXT PRIMARY KEY,
+  usuario_id TEXT NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+  creado_en  TEXT NOT NULL,
+  expira_en  TEXT NOT NULL
+);
 `
 
 // Columnas agregadas después de la primera versión del esquema. Se añaden a
@@ -67,6 +88,7 @@ const MIGRACIONES = [
   ['procesamiento', "TEXT NOT NULL DEFAULT 'listo'"],
   ['procesamiento_error', 'TEXT'],
   ['idioma', 'TEXT'],
+  ['revisado_por', 'TEXT'], // id del usuario que aprobó o devolvió el relato
 ]
 
 export function openDb(file) {

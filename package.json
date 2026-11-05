@@ -12,6 +12,8 @@
     "dev:api": "node --watch server/index.js",
     "dev:ia": "node scripts/ia.js iniciar",
     "ia:instalar": "node scripts/ia.js instalar",
+    "usuarios": "node scripts/usuarios.js",
+    "usuario:crear": "node scripts/usuarios.js crear",
     "build": "vite build",
     "preview": "vite preview",
     "start": "node server/index.js",

@@ -4,6 +4,7 @@ import { openDb } from './db/database.js'
 import { seedIfEmpty } from './db/seed.js'
 import { createApp } from './app.js'
 import { crearServicioIA } from './services/ia.js'
+import { createRepo } from './repositorio.js'
 
 const raiz = path.dirname(fileURLToPath(import.meta.url))
 const env = process.env
@@ -22,6 +23,8 @@ const app = createApp({
   ia,
   uploadsDir: env.UPLOADS_DIR ?? path.join(raiz, 'storage', 'uploads'),
   distDir: path.join(raiz, '..', 'dist'),
+  // Con HTTPS (producción) la cookie de sesión solo viaja cifrada.
+  cookieSegura: env.NODE_ENV === 'production',
 })
 
 // Retoma los relatos que quedaron a medio procesar en la ejecución anterior.
@@ -31,4 +34,10 @@ app.locals.procesador.reanudar()
 const PORT = Number(env.API_PORT ?? 3001)
 app.listen(PORT, () => {
   console.log(`API de Memoria Viva escuchando en http://localhost:${PORT}`)
+  if (createRepo(db).contarUsuarios() === 0) {
+    console.log(
+      '⚠ Aún no hay cuentas de revisión. Crea la primera con:\n' +
+        '  npm run usuario:crear -- --nombre "Tu nombre" --correo tu@correo.com --rol admin'
+    )
+  }
 })

@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { createRepo } from './repositorio.js'
+import { crearAuth, crearCuenta, validarCuenta } from './auth.js'
 import { tx } from './db/database.js'
 import { seed } from './db/seed.js'
 import { ilustrar, regionDe, tipoMedio } from './services/ia.js'
@@ -96,7 +97,7 @@ function validarRelato(b) {
   return errores
 }
 
-export function createApp({ db, uploadsDir, distDir, ia } = {}) {
+export function createApp({ db, uploadsDir, distDir, ia, cookieSegura = false } = {}) {
   const dirSubidas = path.resolve(uploadsDir)
   fs.mkdirSync(dirSubidas, { recursive: true })
 
@@ -105,6 +106,56 @@ export function createApp({ db, uploadsDir, distDir, ia } = {}) {
   const app = express()
   app.disable('x-powered-by')
   app.use(express.json({ limit: '100kb' }))
+
+  // --- Sesión y permisos -----------------------------------------------------
+  // Público: catálogo, detalle y registro de relatos (con consentimiento).
+  // Revisores y administradores: cola de revisión, aprobar, devolver, bitácora.
+  // Solo administradores: cuentas y reinicio de la demo.
+  const auth = crearAuth({ repo, cookieSegura })
+  app.use(auth.cargarSesion)
+  const soloRevisores = auth.requiereRol('revisor', 'admin')
+  const soloAdmin = auth.requiereRol('admin')
+
+  app.post('/api/auth/ingresar', auth.iniciarSesion)
+  app.post('/api/auth/salir', auth.cerrarSesion)
+  app.get('/api/auth/sesion', (req, res) => {
+    res.json({
+      usuario: req.usuario ? repo.usuarioPorId(req.usuario.id) : null,
+      // Sin cuentas, la pantalla de ingreso explica cómo crear la primera.
+      hayCuentas: repo.contarUsuarios() > 0,
+    })
+  })
+
+  // --- Cuentas (solo administradores) ---------------------------------------
+  app.get('/api/usuarios', soloAdmin, (req, res) => {
+    res.json(repo.listarUsuarios())
+  })
+
+  app.post('/api/usuarios', soloAdmin, async (req, res) => {
+    const datos = req.body ?? {}
+    const error = validarCuenta(datos)
+    if (error) throw new HttpError(400, error)
+    if (repo.usuarioPorCorreo(datos.correo.trim())) {
+      throw new HttpError(409, 'Ya existe una cuenta con ese correo')
+    }
+    const usuario = await crearCuenta(repo, datos)
+    repo.registrarActividad(`${req.usuario.nombre} creó la cuenta de ${usuario.nombre} (${usuario.rol})`)
+    res.status(201).json(usuario)
+  })
+
+  app.patch('/api/usuarios/:id', soloAdmin, (req, res) => {
+    const usuario = repo.usuarioPorId(req.params.id)
+    if (!usuario) throw new HttpError(404, 'Cuenta no encontrada')
+    if (typeof req.body?.activo !== 'boolean') throw new HttpError(400, 'Falta el campo "activo"')
+    if (usuario.id === req.usuario.id && !req.body.activo) {
+      throw new HttpError(400, 'No puedes desactivar tu propia cuenta')
+    }
+    const actualizado = repo.cambiarActivo(usuario.id, req.body.activo)
+    repo.registrarActividad(
+      `${req.usuario.nombre} ${req.body.activo ? 'reactivó' : 'desactivó'} la cuenta de ${usuario.nombre}`
+    )
+    res.json(actualizado)
+  })
 
   // --- Almacenamiento de archivos -------------------------------------------
   // Cada archivo se guarda con un nombre aleatorio (UUID) para evitar choques y
@@ -235,7 +286,7 @@ export function createApp({ db, uploadsDir, distDir, ia } = {}) {
 
   // --- Revisión comunitaria -------------------------------------------------
 
-  app.get('/api/revision', (req, res) => {
+  app.get('/api/revision', soloRevisores, (req, res) => {
     res.json(repo.pendientes())
   })
 
@@ -257,7 +308,7 @@ export function createApp({ db, uploadsDir, distDir, ia } = {}) {
   })
 
   // Vuelve a intentar el procesamiento (por ejemplo, si Whisper estaba apagado).
-  app.post('/api/relatos/:id/reprocesar', (req, res) => {
+  app.post('/api/relatos/:id/reprocesar', soloRevisores, (req, res) => {
     const relato = repo.obtener(req.params.id)
     if (!relato) throw new HttpError(404, 'Relato no encontrado')
     if (relato.estado !== 'en_revision') throw new HttpError(409, 'Este relato ya fue revisado')
@@ -269,23 +320,35 @@ export function createApp({ db, uploadsDir, distDir, ia } = {}) {
     res.status(202).json(repo.obtener(relato.id))
   })
 
-  app.post('/api/relatos/:id/aprobar', (req, res) => {
+  app.post('/api/relatos/:id/aprobar', soloRevisores, (req, res) => {
     const relato = pendienteOError(req.params.id)
     const actualizado = tx(db, () => {
-      const r = repo.actualizarEstado(relato.id, { estado: 'revisado', publicado: true })
-      repo.registrarActividad(`Aprobado y publicado: "${relato.titulo}"`, relato.id)
+      const r = repo.actualizarEstado(relato.id, {
+        estado: 'revisado',
+        publicado: true,
+        revisadoPor: req.usuario.id,
+      })
+      repo.registrarActividad(
+        `Aprobado y publicado por ${req.usuario.nombre}: "${relato.titulo}"`,
+        relato.id
+      )
       return r
     })
     res.json(actualizado)
   })
 
-  app.post('/api/relatos/:id/rechazar', (req, res) => {
+  app.post('/api/relatos/:id/rechazar', soloRevisores, (req, res) => {
     const relato = pendienteOError(req.params.id)
     const motivo = texto(req.body?.motivo).slice(0, 500) || null
     const actualizado = tx(db, () => {
-      const r = repo.actualizarEstado(relato.id, { estado: 'devuelto', publicado: false, motivo })
+      const r = repo.actualizarEstado(relato.id, {
+        estado: 'devuelto',
+        publicado: false,
+        motivo,
+        revisadoPor: req.usuario.id,
+      })
       repo.registrarActividad(
-        `Devuelto a la comunidad: "${relato.titulo}"${motivo ? ` — ${motivo}` : ''}`,
+        `Devuelto a la comunidad por ${req.usuario.nombre}: "${relato.titulo}"${motivo ? ` — ${motivo}` : ''}`,
         relato.id
       )
       return r
@@ -314,12 +377,12 @@ export function createApp({ db, uploadsDir, distDir, ia } = {}) {
     res.json(repo.estadisticas())
   })
 
-  app.get('/api/actividad', (req, res) => {
+  app.get('/api/actividad', soloRevisores, (req, res) => {
     res.json(repo.actividad(Math.min(Number(req.query.limit) || 20, 100)))
   })
 
   // Reinicia los datos de demostración (solo fuera de producción).
-  app.post('/api/demo/reset', async (req, res) => {
+  app.post('/api/demo/reset', soloAdmin, async (req, res) => {
     if (process.env.NODE_ENV === 'production') throw new HttpError(403, 'No disponible')
     const archivos = repo.listarArchivos()
     tx(db, () => repo.vaciar())

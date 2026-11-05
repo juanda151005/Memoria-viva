@@ -31,11 +31,15 @@ La primera vez:
 ```bash
 npm install
 npm run ia:instalar
+npm run usuario:crear -- --nombre "Tu nombre" --correo tu@correo.com --rol admin
 ```
 
 `ia:instalar` crea un entorno de Python en `ia-service/.venv` e instala
 faster-whisper. El modelo de Whisper (`small`, unos 460 MB) se descarga
 automáticamente la primera vez que arranca el servicio.
+
+`usuario:crear` crea la primera cuenta de administración y pide la contraseña
+sin mostrarla. No hay cuentas ni contraseñas por defecto en el código.
 
 Luego, cada vez:
 
@@ -59,7 +63,7 @@ vista **Avance**.
 Otros comandos:
 
 ```bash
-npm test          # 16 pruebas automatizadas (API + comunicación con Whisper y Ollama)
+npm test          # 24 pruebas automatizadas (API, IA y seguridad del ingreso)
 npm run build     # compila el frontend en dist/
 npm start         # sirve API + frontend compilado en http://localhost:3001
 ```
@@ -76,6 +80,35 @@ npm start         # sirve API + frontend compilado en http://localhost:3001
 | `IA_PORT` | `8001` | Puerto del servicio de Whisper |
 | `OLLAMA_URL` | `http://127.0.0.1:11434` | Dirección de Ollama |
 | `OLLAMA_MODELO` | `mistral` | Modelo de Ollama para clasificar |
+
+## Cuentas y permisos
+
+| Quién | Qué puede hacer |
+|---|---|
+| Público (sin cuenta) | Explorar el catálogo, ver relatos publicados y **aportar relatos** (con consentimiento) |
+| `revisor` | Además: ver la cola, aprobar, devolver y reprocesar relatos; ver la bitácora |
+| `admin` | Además: crear, desactivar y reactivar cuentas; reiniciar los datos de demostración |
+
+Aportar relatos no exige cuenta a propósito: el registro se hace a menudo desde
+un celular en campo, y nada se publica sin pasar por la revisión.
+
+**Seguridad:** contraseñas con scrypt y sal aleatoria; sesión en una cookie
+`HttpOnly` y `SameSite=Lax` (y `Secure` con `NODE_ENV=production`) cuyo token se
+guarda en la BD solo como hash; bloqueo de 15 minutos tras 5 intentos fallidos;
+el mismo mensaje de error exista o no el correo. La bitácora registra quién
+aprobó o devolvió cada relato.
+
+Gestión desde la terminal:
+
+```bash
+npm run usuario:crear -- --nombre "Ana" --correo ana@correo.com --rol revisor
+npm run usuarios -- listar
+npm run usuarios -- desactivar --correo ana@correo.com
+npm run usuarios -- activar --correo ana@correo.com
+npm run usuarios -- eliminar --correo ana@correo.com
+```
+
+Los administradores también pueden gestionar cuentas en la vista **Cuentas**.
 
 ## Pipeline de IA
 
@@ -121,31 +154,41 @@ sin aprobación.
 
 ## API REST
 
+El acceso de cada ruta se indica entre corchetes: [revisor] o [admin]; el resto es público.
+
 | Método | Ruta | Descripción |
 |---|---|---|
 | GET | `/api/relatos` | Catálogo público (`q`, `departamento`, `tipo`, `tematica`, `epoca`, `region`, `limit`) |
 | GET | `/api/relatos/:id` | Detalle de un relato publicado |
 | POST | `/api/relatos` | Registro multipart (campos + `archivo`); responde `202` y encola el procesamiento con IA |
 | GET | `/api/procesamiento/:id` | Estado del procesamiento con IA |
-| POST | `/api/relatos/:id/reprocesar` | Reintentar el procesamiento con IA |
-| GET | `/api/revision` | Cola de revisión |
-| POST | `/api/relatos/:id/aprobar` | Aprobar y publicar |
-| POST | `/api/relatos/:id/rechazar` | Devolver a la comunidad (`{ motivo }`) |
+| POST | `/api/relatos/:id/reprocesar` | Reintentar el procesamiento con IA [revisor] |
+| GET | `/api/revision` | Cola de revisión [revisor] |
+| POST | `/api/relatos/:id/aprobar` | Aprobar y publicar [revisor] |
+| POST | `/api/relatos/:id/rechazar` | Devolver a la comunidad (`{ motivo }`) [revisor] |
 | GET | `/api/archivos/:id` | Archivo original (soporta rangos para audio/video) |
 | GET | `/api/estadisticas` | Métricas |
-| GET | `/api/actividad` | Bitácora |
+| GET | `/api/actividad` | Bitácora [revisor] |
 | GET | `/api/salud` | Estado de la API, Whisper y el clasificador |
+| POST | `/api/auth/ingresar` | Iniciar sesión (`{ correo, clave }`) |
+| POST | `/api/auth/salir` | Cerrar sesión |
+| GET | `/api/auth/sesion` | Usuario de la sesión actual |
+| GET | `/api/usuarios` | Listar cuentas [admin] |
+| POST | `/api/usuarios` | Crear cuenta [admin] |
+| PATCH | `/api/usuarios/:id` | Activar o desactivar (`{ activo }`) [admin] |
+| POST | `/api/demo/reset` | Reiniciar datos de demostración [admin] |
 
 ## Estructura
 
 ```
 server/
   index.js            Arranque de la API
-  app.js              Rutas, validación, subida de archivos y errores
+  app.js              Rutas, permisos, validación, subida de archivos y errores
+  auth.js             Contraseñas (scrypt), sesiones y bloqueo de fuerza bruta
   repositorio.js      Consultas SQL (único lugar con SQL)
   services/ia.js      Clientes de Whisper y Ollama, reglas de contenido sensible
   services/procesador.js  Cola de procesamiento en segundo plano
-  db/database.js      Esquema SQLite (relatos, archivos, actividad)
+  db/database.js      Esquema SQLite (relatos, archivos, actividad, usuarios, sesiones)
   db/seed.js          Datos iniciales
   tests/api.test.js   Pruebas de integración (node:test) con Whisper y Ollama falsos
 ia-service/
@@ -153,12 +196,13 @@ ia-service/
   requirements.txt
 scripts/
   ia.js               Instala y arranca el servicio de Python
+  usuarios.js         Gestión de cuentas desde la terminal
 src/
   api/client.js       Cliente HTTP (fetch + XHR con progreso de subida)
   hooks/useApi.js     Carga de datos con estados de carga/error
-  context/            Estado compartido de la cola de revisión
+  context/            Sesión (AuthContext) y estado de la cola de revisión (StoreContext)
   components/         Navbar, Footer, StoryCard, RelatoMedia, AudioPlayer, AiBadge…
-  pages/              Home, Catalog, StoryDetail, Upload, Revision, Avance
+  pages/              Home, Catalog, StoryDetail, Upload, Revision, Avance, Ingresar, Cuentas
   data/mockData.js    Taxonomías (departamentos, tipos, temáticas) y relatos semilla
 ```
 
@@ -174,5 +218,4 @@ se versionan.
 ## Próximos pasos
 
 - Generación de ilustraciones con un modelo texto-a-imagen.
-- Autenticación por roles (comunidad, revisor, público).
 - Migración a PostgreSQL y almacenamiento en la nube; despliegue y piloto con una comunidad.

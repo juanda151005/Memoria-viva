@@ -5,7 +5,8 @@ import ErrorBanner from '../components/ErrorBanner.jsx'
 import GeneratedArt from '../components/GeneratedArt.jsx'
 import { api } from '../api/client.js'
 import { useApi } from '../hooks/useApi.js'
-import { estadisticas, pasos } from '../data/mockData.js'
+import { useStore } from '../context/StoreContext.jsx'
+import { pasos } from '../data/mockData.js'
 
 function Hero() {
   return (
@@ -59,14 +60,22 @@ function Hero() {
   )
 }
 
+// Cifras en vivo de la base de datos (GET /api/estadisticas).
 function Stats() {
+  const { estadisticas: e } = useStore()
+  const cifras = [
+    { valor: e?.publicados, label: 'relatos preservados' },
+    { valor: e?.comunidades, label: 'comunidades' },
+    { valor: e?.departamentos, label: 'departamentos' },
+    { valor: e?.pendientes, label: 'relatos en revisión' },
+  ]
   return (
     <section className="container-mv -mt-8 relative z-10">
       <div className="card grid grid-cols-2 gap-6 p-8 shadow-warm sm:grid-cols-4">
-        {estadisticas.map((s) => (
+        {cifras.map((s) => (
           <div key={s.label} className="text-center">
             <div className="font-serif text-4xl font-700 text-terracota sm:text-5xl">
-              {s.valor}
+              {s.valor ?? '—'}
             </div>
             <div className="mt-1 text-sm text-ink/65">{s.label}</div>
           </div>

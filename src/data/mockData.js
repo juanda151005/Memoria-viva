@@ -348,15 +348,6 @@ export const relatosPendientesSeed = [
   },
 ]
 
-// --- Estadísticas de la home ------------------------------------------------
-
-export const estadisticas = [
-  { valor: '247', label: 'relatos preservados' },
-  { valor: '18', label: 'comunidades' },
-  { valor: '6', label: 'departamentos' },
-  { valor: '1.240', label: 'horas de audio' },
-]
-
 // --- Pasos del "cómo funciona" ---------------------------------------------
 
 export const pasos = [

@@ -62,6 +62,19 @@ export function aRelato(row) {
   }
 }
 
+// Usuario sin el hash de la contraseña, en el formato de la API.
+function aUsuario(row) {
+  return {
+    id: row.id,
+    nombre: row.nombre,
+    correo: row.correo,
+    rol: row.rol,
+    activo: row.activo === 1,
+    creadoEn: row.creado_en,
+    ultimoIngreso: row.ultimo_ingreso,
+  }
+}
+
 export function createRepo(db) {
   const stmts = {
     insertarRelato: db.prepare(`
@@ -86,7 +99,7 @@ export function createRepo(db) {
     actualizarEstado: db.prepare(`
       UPDATE relatos
       SET estado = :estado, publicado = :publicado, publicado_en = :publicado_en,
-          motivo_devolucion = :motivo, actualizado_en = :ahora
+          motivo_devolucion = :motivo, revisado_por = :revisado_por, actualizado_en = :ahora
       WHERE id = :id`),
     insertarActividad: db.prepare(
       'INSERT INTO actividad (texto, relato_id, fecha) VALUES (?, ?, ?)'
@@ -117,6 +130,32 @@ export function createRepo(db) {
     guardarClasificacion: db.prepare(
       'UPDATE relatos SET region = ?, tematicas = ?, revision_ia = ?, actualizado_en = ? WHERE id = ?'
     ),
+    // --- Usuarios y sesiones ----------------------------------------------
+    crearUsuario: db.prepare(`
+      INSERT INTO usuarios (id, nombre, correo, clave_hash, rol, activo, creado_en)
+      VALUES (:id, :nombre, :correo, :clave_hash, :rol, 1, :creado_en)`),
+    usuarioPorCorreo: db.prepare('SELECT * FROM usuarios WHERE correo = ?'),
+    usuarioPorId: db.prepare('SELECT * FROM usuarios WHERE id = ?'),
+    listarUsuarios: db.prepare(
+      `SELECT id, nombre, correo, rol, activo, creado_en, ultimo_ingreso
+       FROM usuarios ORDER BY activo DESC, rol, nombre`
+    ),
+    contarUsuarios: db.prepare('SELECT COUNT(*) AS n FROM usuarios'),
+    cambiarActivo: db.prepare('UPDATE usuarios SET activo = ? WHERE id = ?'),
+    registrarIngreso: db.prepare('UPDATE usuarios SET ultimo_ingreso = ? WHERE id = ?'),
+    eliminarUsuario: db.prepare('DELETE FROM usuarios WHERE id = ?'),
+    soltarRevisiones: db.prepare('UPDATE relatos SET revisado_por = NULL WHERE revisado_por = ?'),
+    crearSesion: db.prepare(
+      'INSERT INTO sesiones (id, usuario_id, creado_en, expira_en) VALUES (?, ?, ?, ?)'
+    ),
+    usuarioDeSesion: db.prepare(`
+      SELECT u.id, u.nombre, u.correo, u.rol
+      FROM sesiones s JOIN usuarios u ON u.id = s.usuario_id
+      WHERE s.id = ? AND s.expira_en > ? AND u.activo = 1`),
+    eliminarSesion: db.prepare('DELETE FROM sesiones WHERE id = ?'),
+    eliminarSesionesDe: db.prepare('DELETE FROM sesiones WHERE usuario_id = ?'),
+    limpiarSesiones: db.prepare('DELETE FROM sesiones WHERE expira_en <= ?'),
+
     porProcesar: db.prepare(
       `SELECT id FROM relatos WHERE procesamiento IN ('pendiente', 'transcribiendo', 'clasificando')
        ORDER BY creado_en ASC, rowid ASC`
@@ -208,7 +247,7 @@ export function createRepo(db) {
       })
     },
 
-    actualizarEstado(id, { estado, publicado, motivo = null }) {
+    actualizarEstado(id, { estado, publicado, motivo = null, revisadoPor = null }) {
       const ahora = new Date().toISOString()
       stmts.actualizarEstado.run({
         id,
@@ -216,6 +255,7 @@ export function createRepo(db) {
         publicado: publicado ? 1 : 0,
         publicado_en: publicado ? ahora : null,
         motivo,
+        revisado_por: revisadoPor,
         ahora,
       })
       return obtener(id)
@@ -254,6 +294,60 @@ export function createRepo(db) {
     },
 
     idsPorProcesar: () => stmts.porProcesar.all().map((r) => r.id),
+
+    // --- Usuarios y sesiones ----------------------------------------------
+    crearUsuario({ id, nombre, correo, claveHash, rol }) {
+      stmts.crearUsuario.run({
+        id,
+        nombre,
+        correo: correo.toLowerCase(),
+        clave_hash: claveHash,
+        rol,
+        creado_en: new Date().toISOString(),
+      })
+      return aUsuario(stmts.usuarioPorId.get(id))
+    },
+
+    // Incluye el hash de la contraseña: solo para verificar el ingreso.
+    usuarioConClave: (correo) => stmts.usuarioPorCorreo.get(correo.toLowerCase()) ?? null,
+    usuarioPorCorreo: (correo) => {
+      const row = stmts.usuarioPorCorreo.get(correo.toLowerCase())
+      return row ? aUsuario(row) : null
+    },
+    usuarioPorId: (id) => {
+      const row = stmts.usuarioPorId.get(id)
+      return row ? aUsuario(row) : null
+    },
+    listarUsuarios: () => stmts.listarUsuarios.all().map(aUsuario),
+    contarUsuarios: () => stmts.contarUsuarios.get().n,
+
+    cambiarActivo(id, activo) {
+      stmts.cambiarActivo.run(activo ? 1 : 0, id)
+      if (!activo) stmts.eliminarSesionesDe.run(id)
+      return aUsuario(stmts.usuarioPorId.get(id))
+    },
+
+    eliminarUsuario(id) {
+      stmts.soltarRevisiones.run(id)
+      stmts.eliminarSesionesDe.run(id)
+      stmts.eliminarUsuario.run(id)
+    },
+
+    registrarIngreso: (id) => stmts.registrarIngreso.run(new Date().toISOString(), id),
+
+    crearSesion({ id, usuarioId, duracionMs }) {
+      const ahora = new Date()
+      stmts.limpiarSesiones.run(ahora.toISOString())
+      stmts.crearSesion.run(
+        id,
+        usuarioId,
+        ahora.toISOString(),
+        new Date(ahora.getTime() + duracionMs).toISOString()
+      )
+    },
+    usuarioDeSesion: (id) =>
+      stmts.usuarioDeSesion.get(id, new Date().toISOString()) ?? null,
+    eliminarSesion: (id) => stmts.eliminarSesion.run(id),
 
     obtenerArchivo: (id) => stmts.obtenerArchivo.get(id) ?? null,
 

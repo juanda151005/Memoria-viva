@@ -9,6 +9,8 @@ import { openDb } from '../db/database.js'
 import { seed } from '../db/seed.js'
 import { createApp } from '../app.js'
 import { crearServicioIA } from '../services/ia.js'
+import { createRepo } from '../repositorio.js'
+import { crearCuenta } from '../auth.js'
 
 // Pruebas de integración de la API. Cada corrida usa una base de datos en
 // memoria, una carpeta temporal y dos servidores falsos que imitan a Whisper
@@ -75,12 +77,39 @@ function ollamaFalso() {
 }
 
 let origen
+let repo
 const api = (ruta, opciones) => fetch(`${origen}/api${ruta}`, opciones)
 const json = async (ruta, opciones) => (await api(ruta, opciones)).json()
 const procesado = async (id) => {
   await app.locals.procesador.inactivo()
   return json(`/procesamiento/${id}`)
 }
+
+// --- Sesiones de prueba --------------------------------------------------------
+// Las contraseñas se generan al vuelo en cada corrida; no quedan en el código.
+const claveAleatoria = () => `prueba-${Math.random().toString(36).slice(2)}-${Date.now()}`
+const cuentas = {}
+
+async function crearYEntrar(nombre, correo, rol) {
+  const clave = claveAleatoria()
+  await crearCuenta(repo, { nombre, correo, rol, clave })
+  const res = await ingresar(correo, clave)
+  assert.equal(res.status, 200)
+  return { nombre, correo, clave, cookie: res.headers.get('set-cookie').split(';')[0] }
+}
+
+const ingresar = (correo, clave) =>
+  api('/auth/ingresar', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ correo, clave }),
+  })
+
+// Petición con la sesión de una cuenta (por defecto, la revisora).
+const como = (cuenta, ruta, opciones = {}) =>
+  api(ruta, { ...opciones, headers: { ...opciones.headers, Cookie: cuenta.cookie } })
+const comoRevisor = (ruta, opciones) => como(cuentas.revisora, ruta, opciones)
+const jsonRevisor = async (ruta, opciones) => (await comoRevisor(ruta, opciones)).json()
 
 function formulario(campos = {}, archivo) {
   const fd = new FormData()
@@ -118,8 +147,11 @@ before(async () => {
   })
   const db = openDb(':memory:')
   seed(db)
+  repo = createRepo(db)
   app = createApp({ db, ia, uploadsDir: path.join(tmp, 'uploads') })
   origen = await levantar(app)
+  cuentas.revisora = await crearYEntrar('Ana Revisora', 'ana@prueba.co', 'revisor')
+  cuentas.admin = await crearYEntrar('Luis Admin', 'luis@prueba.co', 'admin')
 })
 
 beforeEach(() => {
@@ -225,7 +257,7 @@ test('un audio se guarda, se transcribe con Whisper y se clasifica con Ollama', 
   assert.ok(ollama.ultimaPeticion.format.properties.tipo.enum.includes('musica'))
 
   // Sigue en la cola, no en el catálogo.
-  assert.ok((await json('/revision')).some((x) => x.id === recibido.id))
+  assert.ok((await jsonRevisor('/revision')).some((x) => x.id === recibido.id))
   assert.ok(!(await json('/relatos')).some((x) => x.id === recibido.id))
 })
 
@@ -243,7 +275,7 @@ test('no se puede aprobar mientras la IA está procesando', async () => {
   await new Promise((r) => setTimeout(r, 50))
 
   assert.equal((await json(`/procesamiento/${id}`)).procesamiento, 'transcribiendo')
-  const res = await api(`/relatos/${id}/aprobar`, { method: 'POST' })
+  const res = await comoRevisor(`/relatos/${id}/aprobar`, { method: 'POST' })
   assert.equal(res.status, 409)
 
   whisper.liberar()
@@ -258,7 +290,7 @@ test('si Whisper está apagado queda en error y se puede reprocesar', async () =
   assert.match(conError.procesamientoError, /Whisper/)
 
   whisper.modo = 'ok'
-  const res = await api(`/relatos/${id}/reprocesar`, { method: 'POST' })
+  const res = await comoRevisor(`/relatos/${id}/reprocesar`, { method: 'POST' })
   assert.equal(res.status, 202)
   assert.equal((await procesado(id)).procesamiento, 'listo')
 })
@@ -293,7 +325,7 @@ test('una imagen original no se transcribe ni se ilustra con IA', async () => {
 // --- Revisión comunitaria ----------------------------------------------------
 
 test('aprobar publica el relato y deja rastro en la bitácora', async () => {
-  const res = await api(`/relatos/${relatoConAudio.id}/aprobar`, { method: 'POST' })
+  const res = await comoRevisor(`/relatos/${relatoConAudio.id}/aprobar`, { method: 'POST' })
   assert.equal(res.status, 200)
   const aprobado = await res.json()
   assert.equal(aprobado.estado, 'revisado')
@@ -301,14 +333,15 @@ test('aprobar publica el relato y deja rastro en la bitácora', async () => {
 
   assert.ok((await json('/relatos')).some((r) => r.id === relatoConAudio.id))
   assert.equal((await api(`/relatos/${relatoConAudio.id}`)).status, 200)
-  assert.match((await json('/actividad'))[0].texto, /Aprobado y publicado/)
+  // La bitácora deja constancia de quién aprobó.
+  assert.match((await jsonRevisor('/actividad'))[0].texto, /Aprobado y publicado por Ana Revisora/)
 
-  const repetido = await api(`/relatos/${relatoConAudio.id}/aprobar`, { method: 'POST' })
+  const repetido = await comoRevisor(`/relatos/${relatoConAudio.id}/aprobar`, { method: 'POST' })
   assert.equal(repetido.status, 409)
 })
 
 test('devolver un relato lo saca de la cola y guarda el motivo', async () => {
-  const res = await api('/relatos/pend-trampa-pesca/rechazar', {
+  const res = await comoRevisor('/relatos/pend-trampa-pesca/rechazar', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ motivo: 'Falta confirmar el nombre del narrador' }),
@@ -317,14 +350,114 @@ test('devolver un relato lo saca de la cola y guarda el motivo', async () => {
   const devuelto = await res.json()
   assert.equal(devuelto.estado, 'devuelto')
   assert.equal(devuelto.motivoDevolucion, 'Falta confirmar el nombre del narrador')
-  assert.ok(!(await json('/revision')).some((r) => r.id === 'pend-trampa-pesca'))
+  assert.ok(!(await jsonRevisor('/revision')).some((r) => r.id === 'pend-trampa-pesca'))
 })
 
 test('las estadísticas reflejan el estado de la base de datos', async () => {
   const stats = await json('/estadisticas')
   assert.equal(stats.publicados, (await json('/relatos')).length)
-  assert.equal(stats.pendientes, (await json('/revision')).length)
+  assert.equal(stats.pendientes, (await jsonRevisor('/revision')).length)
   assert.equal(stats.devueltos, 1)
   assert.equal(stats.procesando, 0)
   assert.equal(stats.archivos, 6)
+})
+
+// --- Cuentas y permisos -------------------------------------------------------
+
+test('las rutas de revisión y de cuentas exigen sesión (401)', async () => {
+  assert.equal((await api('/revision')).status, 401)
+  assert.equal((await api('/actividad')).status, 401)
+  assert.equal((await api('/relatos/pend-arrullo-guapi/aprobar', { method: 'POST' })).status, 401)
+  assert.equal((await api('/usuarios')).status, 401)
+  assert.equal((await api('/demo/reset', { method: 'POST' })).status, 401)
+  // Lo público sigue abierto.
+  assert.equal((await api('/relatos')).status, 200)
+  assert.equal((await api('/estadisticas')).status, 200)
+})
+
+test('ingresar crea una sesión en una cookie HttpOnly y SameSite', async () => {
+  const res = await ingresar(cuentas.revisora.correo, cuentas.revisora.clave)
+  const cookie = res.headers.get('set-cookie')
+  assert.match(cookie, /HttpOnly/)
+  assert.match(cookie, /SameSite=Lax/)
+  const { usuario } = await res.json()
+  assert.equal(usuario.rol, 'revisor')
+  assert.equal(usuario.claveHash, undefined)
+  assert.equal(usuario.clave_hash, undefined)
+
+  const sesion = await (await comoRevisor('/auth/sesion')).json()
+  assert.equal(sesion.usuario.correo, 'ana@prueba.co')
+  assert.equal(sesion.hayCuentas, true)
+  assert.equal((await json('/auth/sesion')).usuario, null)
+})
+
+test('credenciales incorrectas dan el mismo error, exista o no el correo', async () => {
+  const claveMala = await ingresar(cuentas.revisora.correo, 'no-es-la-clave')
+  const correoMalo = await ingresar('nadie@prueba.co', 'no-es-la-clave')
+  assert.equal(claveMala.status, 401)
+  assert.equal(correoMalo.status, 401)
+  assert.deepEqual(await claveMala.json(), await correoMalo.json())
+})
+
+test('bloquea el ingreso tras 5 intentos fallidos (429)', async () => {
+  const intento = () => ingresar('objetivo@prueba.co', 'adivinando-la-clave')
+  for (let i = 0; i < 5; i++) assert.equal((await intento()).status, 401)
+  const bloqueado = await intento()
+  assert.equal(bloqueado.status, 429)
+  assert.ok(Number(bloqueado.headers.get('retry-after')) > 0)
+})
+
+test('solo un administrador puede crear cuentas', async () => {
+  const nueva = { nombre: 'Rosa Cantadora', correo: 'rosa@prueba.co', rol: 'revisor', clave: claveAleatoria() }
+  const peticion = (cuenta, datos) =>
+    como(cuenta, '/usuarios', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(datos),
+    })
+
+  assert.equal((await como(cuentas.revisora, '/usuarios')).status, 403)
+  assert.equal((await peticion(cuentas.revisora, nueva)).status, 403)
+
+  assert.equal((await peticion(cuentas.admin, { ...nueva, clave: 'corta' })).status, 400)
+  const creada = await peticion(cuentas.admin, nueva)
+  assert.equal(creada.status, 201)
+  assert.equal((await creada.json()).rol, 'revisor')
+  assert.equal((await peticion(cuentas.admin, nueva)).status, 409)
+
+  const lista = await (await como(cuentas.admin, '/usuarios')).json()
+  assert.ok(lista.some((u) => u.correo === 'rosa@prueba.co'))
+  assert.ok(lista.every((u) => u.claveHash === undefined && u.clave_hash === undefined))
+})
+
+test('desactivar una cuenta cierra sus sesiones e impide el ingreso', async () => {
+  const temporal = await crearYEntrar('Cuenta Temporal', 'temporal@prueba.co', 'revisor')
+  assert.equal((await como(temporal, '/revision')).status, 200)
+
+  const { id } = repo.usuarioPorCorreo('temporal@prueba.co')
+  const res = await como(cuentas.admin, `/usuarios/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ activo: false }),
+  })
+  assert.equal(res.status, 200)
+  assert.equal((await como(temporal, '/revision')).status, 401)
+  assert.equal((await ingresar(temporal.correo, temporal.clave)).status, 401)
+})
+
+test('un administrador no puede desactivar su propia cuenta', async () => {
+  const { id } = repo.usuarioPorCorreo('luis@prueba.co')
+  const res = await como(cuentas.admin, `/usuarios/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ activo: false }),
+  })
+  assert.equal(res.status, 400)
+})
+
+test('cerrar sesión invalida la cookie', async () => {
+  const sesion = await crearYEntrar('Cuenta Salida', 'salida@prueba.co', 'revisor')
+  assert.equal((await como(sesion, '/revision')).status, 200)
+  await como(sesion, '/auth/salir', { method: 'POST' })
+  assert.equal((await como(sesion, '/revision')).status, 401)
 })

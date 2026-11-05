@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../api/client.js'
 import { EN_PROCESO, useStore } from '../context/StoreContext.jsx'
+import { useAuth } from '../context/AuthContext.jsx'
 import { departamentos, tiposPatrimonio, tematicas, epocas } from '../data/mockData.js'
 import { formatoBytes, formatoDuracion } from '../utils/formato.js'
 
@@ -219,6 +220,7 @@ function Stepper({ current, transcrito, progreso, file, resultado, transcurrido 
 
 export default function Upload() {
   const { subirRelato, reprocesar } = useStore()
+  const { puedeRevisar } = useAuth()
 
   const [file, setFile] = useState(null)
   const [form, setForm] = useState(formularioVacio)
@@ -599,13 +601,16 @@ export default function Upload() {
                   <p className="font-semibold text-terracota">La IA no pudo procesar el relato</p>
                   <p className="mt-1 text-xs text-ink/70">{resultado?.procesamientoError}</p>
                   <p className="mt-2 text-xs text-ink/60">
-                    El relato y el archivo ya están guardados. Puedes reintentar ahora o más tarde
-                    desde el panel de revisión.
+                    {puedeRevisar
+                      ? 'El relato y el archivo ya están guardados. Puedes reintentar ahora o más tarde desde el panel de revisión.'
+                      : 'El relato y el archivo ya están guardados. Una persona revisora podrá volver a procesarlo desde el panel de revisión.'}
                   </p>
                   <div className="mt-3 flex flex-wrap gap-2">
-                    <button onClick={reintentar} className="btn-primary !px-4 !py-2">
-                      Reintentar
-                    </button>
+                    {puedeRevisar && (
+                      <button onClick={reintentar} className="btn-primary !px-4 !py-2">
+                        Reintentar
+                      </button>
+                    )}
                     <button onClick={reset} className="btn-ghost !px-4 !py-2">
                       Subir otro
                     </button>
@@ -631,9 +636,15 @@ export default function Upload() {
                     </p>
                   )}
                   <div className="mt-4 flex flex-col gap-2">
-                    <Link to="/revision" className="btn-selva !px-4 !py-2">
-                      Ver panel de revisión →
-                    </Link>
+                    {puedeRevisar ? (
+                      <Link to="/revision" className="btn-selva !px-4 !py-2">
+                        Ver panel de revisión →
+                      </Link>
+                    ) : (
+                      <Link to="/catalogo" className="btn-selva !px-4 !py-2">
+                        Explorar el catálogo →
+                      </Link>
+                    )}
                     <button onClick={reset} className="btn-ghost !px-4 !py-2">
                       Subir otro
                     </button>

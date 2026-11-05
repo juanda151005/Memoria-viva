@@ -8,6 +8,9 @@ import StoryDetail from './pages/StoryDetail.jsx'
 import Upload from './pages/Upload.jsx'
 import Revision from './pages/Revision.jsx'
 import Avance from './pages/Avance.jsx'
+import Ingresar from './pages/Ingresar.jsx'
+import Cuentas from './pages/Cuentas.jsx'
+import RequiereRol from './components/RequiereRol.jsx'
 
 function ScrollToTop() {
   const { pathname } = useLocation()
@@ -28,7 +31,23 @@ export default function App() {
           <Route path="/catalogo" element={<Catalog />} />
           <Route path="/relato/:id" element={<StoryDetail />} />
           <Route path="/subir" element={<Upload />} />
-          <Route path="/revision" element={<Revision />} />
+          <Route
+            path="/revision"
+            element={
+              <RequiereRol roles={['revisor', 'admin']}>
+                <Revision />
+              </RequiereRol>
+            }
+          />
+          <Route
+            path="/cuentas"
+            element={
+              <RequiereRol roles={['admin']}>
+                <Cuentas />
+              </RequiereRol>
+            }
+          />
+          <Route path="/ingresar" element={<Ingresar />} />
           <Route path="/avance" element={<Avance />} />
         </Routes>
       </main>

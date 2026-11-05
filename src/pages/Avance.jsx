@@ -2,20 +2,26 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../api/client.js'
 import { useStore } from '../context/StoreContext.jsx'
+import { useAuth } from '../context/AuthContext.jsx'
 import { formatoBytes } from '../utils/formato.js'
 
 // Avance ponderado frente a la visión completa del producto.
 // peso = esfuerzo relativo del componente; logrado = puntos ya cumplidos.
 const componentes = [
   { nombre: 'Concepto, flujo y principios éticos', peso: 10, logrado: 10, nota: 'Completo' },
-  { nombre: 'Diseño, UX e interfaz (6 vistas)', peso: 20, logrado: 20, nota: 'Completo' },
+  { nombre: 'Diseño, UX e interfaz', peso: 20, logrado: 20, nota: 'Completo' },
   { nombre: 'Flujo funcional de punta a punta', peso: 8, logrado: 8, nota: 'Completo' },
   { nombre: 'Backend, base de datos y almacenamiento', peso: 15, logrado: 15, nota: 'Completo' },
-  { nombre: 'Transcripción real (Whisper)', peso: 12, logrado: 12, nota: 'Completo en esta entrega: faster-whisper local' },
-  { nombre: 'Clasificación automática (NLP)', peso: 10, logrado: 10, nota: 'Completo en esta entrega: LLM local (Ollama) + reglas' },
+  { nombre: 'Transcripción real (Whisper)', peso: 12, logrado: 12, nota: 'Completo: faster-whisper local' },
+  { nombre: 'Clasificación automática (NLP)', peso: 10, logrado: 10, nota: 'Completo: LLM local (Ollama) + reglas' },
   { nombre: 'Ilustraciones texto-a-imagen', peso: 8, logrado: 0, nota: 'Hoy: ilustración generativa SVG' },
-  { nombre: 'Autenticación por roles y moderación', peso: 7, logrado: 3, nota: 'Moderación persistida; falta autenticación' },
-  { nombre: 'Despliegue, seguridad, pruebas y piloto', peso: 10, logrado: 2, nota: '16 pruebas automatizadas y validación' },
+  { nombre: 'Autenticación por roles y moderación', peso: 7, logrado: 7, nota: 'Completo en esta entrega' },
+  {
+    nombre: 'Despliegue, seguridad, pruebas y piloto',
+    peso: 10,
+    logrado: 3,
+    nota: '24 pruebas, contraseñas cifradas y bloqueo de fuerza bruta; falta desplegar y el piloto',
+  },
 ]
 
 const progreso = componentes.reduce((total, c) => total + c.logrado, 0)
@@ -50,7 +56,7 @@ const fases = [
     ],
   },
   {
-    nombre: 'Fase 4 — Integración de IA real (entrega actual)',
+    nombre: 'Fase 4 — Integración de IA real',
     estado: 'completado',
     items: [
       'Transcripción con Whisper local (faster-whisper, modelo small)',
@@ -61,13 +67,23 @@ const fases = [
     ],
   },
   {
-    nombre: 'Fase 5 — Ilustraciones, cuentas, despliegue y piloto',
+    nombre: 'Fase 5 — Cuentas y permisos (entrega actual)',
+    estado: 'completado',
+    items: [
+      'Roles de revisión y administración; aportar relatos sigue siendo abierto',
+      'Contraseñas cifradas con scrypt y sesiones en cookie HttpOnly',
+      'Bloqueo temporal tras 5 intentos fallidos de ingreso',
+      'Gestión de cuentas desde la app y desde la terminal',
+      'La bitácora registra quién aprobó o devolvió cada relato',
+    ],
+  },
+  {
+    nombre: 'Fase 6 — Ilustraciones, despliegue y piloto',
     estado: 'siguiente',
     items: [
       'Ilustraciones con modelo texto-a-imagen',
-      'Autenticación por roles (comunidad, revisor, público)',
-      'Migración a PostgreSQL, almacenamiento en la nube y despliegue',
-      'Piloto con una comunidad real',
+      'Despliegue con HTTPS (PostgreSQL y almacenamiento en la nube)',
+      'Piloto con una comunidad real, con consentimiento informado',
     ],
   },
 ]
@@ -81,20 +97,31 @@ const arquitectura = [
   { icon: '✅', titulo: 'Moderación humana', tec: 'Human-in-the-loop', desc: 'La comunidad aprueba o devuelve con motivo; la IA nunca publica sola.', real: true },
 ]
 
+// [método, ruta, descripción, acceso]
 const endpoints = [
-  ['GET', '/api/relatos', 'Catálogo público con filtros y búsqueda'],
-  ['GET', '/api/relatos/:id', 'Detalle de un relato publicado'],
-  ['POST', '/api/relatos', 'Registro de relato + archivo; encola el procesamiento con IA'],
-  ['GET', '/api/procesamiento/:id', 'Estado del procesamiento con IA'],
-  ['POST', '/api/relatos/:id/reprocesar', 'Reintentar el procesamiento con IA'],
-  ['GET', '/api/revision', 'Cola de revisión comunitaria'],
-  ['POST', '/api/relatos/:id/aprobar', 'Aprobar y publicar'],
-  ['POST', '/api/relatos/:id/rechazar', 'Devolver a la comunidad con motivo'],
-  ['GET', '/api/archivos/:id', 'Archivo original (con streaming)'],
-  ['GET', '/api/estadisticas', 'Métricas del sistema'],
-  ['GET', '/api/actividad', 'Bitácora de actividad'],
-  ['GET', '/api/salud', 'Estado de la API, Whisper y el clasificador'],
+  ['GET', '/api/relatos', 'Catálogo con filtros y búsqueda', 'público'],
+  ['GET', '/api/relatos/:id', 'Detalle de un relato publicado', 'público'],
+  ['POST', '/api/relatos', 'Registro de relato + archivo; encola la IA', 'público'],
+  ['GET', '/api/procesamiento/:id', 'Estado del procesamiento con IA', 'público'],
+  ['GET', '/api/archivos/:id', 'Archivo original (con streaming)', 'público'],
+  ['GET', '/api/estadisticas', 'Métricas del sistema', 'público'],
+  ['GET', '/api/salud', 'Estado de la API, Whisper y el clasificador', 'público'],
+  ['POST', '/api/auth/ingresar', 'Iniciar sesión', 'público'],
+  ['GET', '/api/revision', 'Cola de revisión comunitaria', 'revisor'],
+  ['POST', '/api/relatos/:id/aprobar', 'Aprobar y publicar', 'revisor'],
+  ['POST', '/api/relatos/:id/rechazar', 'Devolver a la comunidad con motivo', 'revisor'],
+  ['POST', '/api/relatos/:id/reprocesar', 'Reintentar el procesamiento con IA', 'revisor'],
+  ['GET', '/api/actividad', 'Bitácora de actividad', 'revisor'],
+  ['GET', '/api/usuarios', 'Listar cuentas', 'admin'],
+  ['POST', '/api/usuarios', 'Crear cuenta', 'admin'],
+  ['PATCH', '/api/usuarios/:id', 'Activar o desactivar cuenta', 'admin'],
 ]
+
+const colorAcceso = {
+  público: 'text-ink/45',
+  revisor: 'bg-selva/10 text-selva',
+  admin: 'bg-anil/10 text-anil',
+}
 
 const tablas = [
   {
@@ -112,16 +139,27 @@ const tablas = [
     desc: 'Bitácora auditable del flujo de revisión',
     campos: ['id', 'texto', 'relato_id', 'fecha'],
   },
+  {
+    nombre: 'usuarios',
+    desc: 'Cuentas de revisión y administración',
+    campos: ['id', 'nombre', 'correo', 'clave_hash (scrypt)', 'rol', 'activo'],
+  },
+  {
+    nombre: 'sesiones',
+    desc: 'Sesiones activas; se guarda el hash del token, no el token',
+    campos: ['id (sha256)', 'usuario_id → usuarios', 'expira_en'],
+  },
 ]
 
 const changelog = [
-  'Transcripción real con Whisper local (faster-whisper) en un servicio Python.',
-  'Clasificación con un modelo de lenguaje local (Mistral vía Ollama): tipo, temáticas, resumen y alertas.',
-  'El modelo da una segunda opinión independiente: no conoce el tipo registrado.',
-  'Procesamiento en segundo plano, con estado en vivo, cola y reintento si un servicio falla.',
-  'Si Ollama no está disponible, la clasificación sigue funcionando solo con reglas.',
-  'No se puede aprobar un relato hasta que la IA termine de procesarlo.',
-  '16 pruebas automatizadas, incluidas las de comunicación con Whisper y Ollama.',
+  'Cuentas con roles de revisión y administración.',
+  'La cola de revisión, las aprobaciones y la bitácora ahora exigen sesión.',
+  'Contraseñas cifradas con scrypt; la sesión viaja en una cookie HttpOnly.',
+  'Bloqueo temporal tras 5 intentos fallidos y mismo mensaje exista o no el correo.',
+  'Página de cuentas para administradores y comando npm run usuario:crear.',
+  'La bitácora registra quién aprobó o devolvió cada relato.',
+  'Las estadísticas de Inicio ahora salen de la base de datos.',
+  '24 pruebas automatizadas, 8 de ellas de seguridad del ingreso.',
 ]
 
 const estadoStyle = {
@@ -163,10 +201,15 @@ function ServicioIA({ nombre, servicio, apagado }) {
   )
 }
 
-const colorMetodo = { GET: 'bg-selva/10 text-selva', POST: 'bg-terracota/10 text-terracota' }
+const colorMetodo = {
+  GET: 'bg-selva/10 text-selva',
+  POST: 'bg-terracota/10 text-terracota',
+  PATCH: 'bg-ocre/15 text-terracota-dark',
+}
 
 export default function Avance() {
   const { estadisticas, reiniciarDemo, refrescar } = useStore()
+  const { esAdmin } = useAuth()
   const [intento, setIntento] = useState(0)
   const [salud, setSalud] = useState({ data: null, loading: true })
   const [reiniciando, setReiniciando] = useState(false)
@@ -234,8 +277,8 @@ export default function Avance() {
               />
             </div>
             <p className="mt-2 text-xs text-ink/55">
-              Fase actual: <strong>Integración de IA real</strong> (Whisper + modelo de lenguaje
-              local) — completada en esta entrega. Siguiente: ilustraciones, cuentas y despliegue.
+              Fase actual: <strong>Cuentas y permisos</strong> — completada en esta entrega.
+              Siguiente: ilustraciones, despliegue y piloto.
             </p>
           </div>
         </div>
@@ -418,7 +461,7 @@ export default function Avance() {
           <div>
             <h2 className="font-serif text-2xl font-600 text-ink">API REST</h2>
             <div className="card mt-5 divide-y divide-arena/70">
-              {endpoints.map(([metodo, ruta, desc]) => (
+              {endpoints.map(([metodo, ruta, desc, acceso]) => (
                 <div key={metodo + ruta} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3">
                   <span
                     className={`w-12 rounded px-1.5 py-0.5 text-center font-mono text-[11px] font-semibold ${colorMetodo[metodo]}`}
@@ -426,6 +469,9 @@ export default function Avance() {
                     {metodo}
                   </span>
                   <code className="font-mono text-xs text-ink">{ruta}</code>
+                  <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase ${colorAcceso[acceso]}`}>
+                    {acceso}
+                  </span>
                   <span className="w-full text-xs text-ink/55 sm:ml-auto sm:w-auto">{desc}</span>
                 </div>
               ))}
@@ -505,6 +551,7 @@ export default function Avance() {
               <li>• Multer — subida y almacenamiento de archivos</li>
               <li>• Python + faster-whisper — transcripción local</li>
               <li>• Ollama + Mistral 7B — clasificación local</li>
+              <li>• scrypt + sesiones HttpOnly — cuentas y permisos</li>
               <li>• node:test — pruebas automatizadas de integración</li>
             </ul>
             <div className="mt-6 flex flex-wrap gap-2">
@@ -518,13 +565,15 @@ export default function Avance() {
                 Panel de revisión
               </Link>
             </div>
-            <button
-              onClick={reiniciar}
-              disabled={reiniciando}
-              className="mt-5 text-xs text-cream/60 underline hover:text-cream disabled:opacity-50"
-            >
-              {reiniciando ? 'Reiniciando…' : 'Reiniciar datos de demostración'}
-            </button>
+            {esAdmin && (
+              <button
+                onClick={reiniciar}
+                disabled={reiniciando}
+                className="mt-5 block text-xs text-cream/60 underline hover:text-cream disabled:opacity-50"
+              >
+                {reiniciando ? 'Reiniciando…' : 'Reiniciar datos de demostración'}
+              </button>
+            )}
           </div>
         </section>
       </div>

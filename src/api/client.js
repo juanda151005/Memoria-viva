@@ -60,6 +60,19 @@ export const api = {
   estadisticas: () => request('/estadisticas'),
   reiniciarDemo: () => post('/demo/reset'),
 
+  // Sesión y cuentas
+  sesion: () => request('/auth/sesion'),
+  ingresar: (correo, clave) => post('/auth/ingresar', { correo, clave }),
+  salir: () => post('/auth/salir'),
+  usuarios: () => request('/usuarios'),
+  crearUsuario: (datos) => post('/usuarios', datos),
+  cambiarActivo: (usuarioId, activo) =>
+    request(`/usuarios/${id(usuarioId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ activo }),
+    }),
+
   // Usa XMLHttpRequest (y no fetch) para poder reportar el progreso real de la
   // subida del archivo. onProgreso recibe un valor entre 0 y 1.
   subirRelato(formData, onProgreso) {
